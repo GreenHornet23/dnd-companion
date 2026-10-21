@@ -1,0 +1,117 @@
+# Pubblica una release quando fai push di un tag "vX.Y.Z" (usa: npm run release -- 0.2.0).
+# Produce: installer desktop firmati + latest.json (per l'updater di Tauri) + APK Android firmato.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  # I client leggono sempre l'ultima release pubblicata di QUESTO repository
+  VITE_UPDATE_MANIFEST_URL: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Il tag deve coincidere con la versione dell'app
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./package.json').version")
+          TAURI=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "tag=$TAG package.json=$PKG tauri.conf.json=$TAURI"
+          [ "$TAG" = "$PKG" ] && [ "$TAG" = "$TAURI" ] || { echo "Versioni non allineate"; exit 1; }
+
+  desktop:
+    needs: check-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: macos-latest, args: "--target aarch64-apple-darwin" }
+          - { platform: macos-latest, args: "--target x86_64-apple-darwin" }
+          - { platform: ubuntu-22.04, args: "" }
+          - { platform: windows-latest, args: "" }
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: swatinem/rust-cache@v2
+        with: { workspaces: "src-tauri -> target" }
+      - name: Dipendenze Linux
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: Punta l'updater a questo repository
+        shell: bash
+        run: sed -i.bak "s#github.com/OWNER/REPO#github.com/${GITHUB_REPOSITORY}#" src-tauri/tauri.conf.json && rm src-tauri/tauri.conf.json.bak
+      - run: npm ci
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Dungeon Companion ${{ github.ref_name }}"
+          releaseBody: "Vedi i file qui sotto per installare. Le app già installate mostrano l'avviso di aggiornamento."
+          releaseDraft: false
+          prerelease: false
+          uploadUpdaterJson: true
+          args: ${{ matrix.args }}
+
+  android:
+    needs: desktop
+    runs-on: ubuntu-22.04
+    # Si salta se non hai configurato la chiave di firma Android (ANDROID_KEYSTORE_BASE64)
+    if: ${{ vars.BUILD_ANDROID == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: android-actions/setup-android@v3
+      - name: SDK e NDK
+        run: |
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;27.0.12077973"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+      - run: npm ci
+      - name: Build APK
+        run: |
+          npx tauri android init
+          npx tauri android build --apk
+      - name: Allinea e firma l'APK
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          BT="$ANDROID_HOME/build-tools/34.0.0"
+          UNSIGNED=$(find src-tauri/gen/android -name "*release-unsigned.apk" | head -n1)
+          "$BT/zipalign" -f -p 4 "$UNSIGNED" "$RUNNER_TEMP/aligned.apk"
+          "$BT/apksigner" sign --ks "$RUNNER_TEMP/release.jks" --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KS_PASS --out "DungeonCompanion-${GITHUB_REF_NAME}.apk" "$RUNNER_TEMP/aligned.apk"
+      - name: Allega l'APK e aggiorna latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          APK="DungeonCompanion-${GITHUB_REF_NAME}.apk"
+          gh release upload "$GITHUB_REF_NAME" "$APK" --clobber
+          gh release download "$GITHUB_REF_NAME" -p latest.json -O latest.json
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${APK}"
+          jq --arg u "$URL" '.android_apk_url = $u' latest.json > latest.tmp && mv latest.tmp latest.json
+          gh release upload "$GITHUB_REF_NAME" latest.json --clobber

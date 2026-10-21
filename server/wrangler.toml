@@ -1,0 +1,19 @@
+name = "dungeon-companion-sync"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+
+# Dopo `wrangler d1 create dungeon-companion` incolla qui il database_id stampato.
+[[d1_databases]]
+binding = "DB"
+database_name = "dungeon-companion"
+database_id = "SOSTITUISCI_CON_IL_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "BLOBS"
+bucket_name = "dungeon-companion-blobs"
+
+[vars]
+# Spazio massimo di file (PDF, mappe, ritratti) per campagna, in byte: 3 GB
+# (lo spazio R2 gratuito è 10 GB in totale: se hai più campagne abbassalo)
+MAX_CAMPAIGN_BYTES = "3221225472"
