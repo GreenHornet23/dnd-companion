@@ -6,7 +6,7 @@ compatibility_date = "2025-09-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "dungeon-companion"
-database_id = "SOSTITUISCI_CON_IL_DATABASE_ID"
+database_id = "06e7d8b1-84c4-4b37-8d61-27cafafb780c"
 migrations_dir = "migrations"
 
 [[r2_buckets]]
