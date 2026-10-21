@@ -37,7 +37,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "SOSTITUISCI_CON_LA_CHIAVE_PUBBLICA_GENERATA_DA_tauri_signer_generate",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQxMDQ0N0VENTA2NkExMTIKUldRU29XWlE3VWNFUVFRVHhTaVh4T3hFRzdEMnREODk1TkZWRmVZbjZLNDBkcGVTOTBRU0VPSEwK",
       "endpoints": [
         "https://github.com/OWNER/REPO/releases/latest/download/latest.json"
       ]
