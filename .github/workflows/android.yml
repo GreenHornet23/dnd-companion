@@ -1,0 +1,121 @@
+# APK Android firmato. Parte da solo quando pubblichi una release (tag vX.Y.Z), oppure a mano
+# dalla scheda Actions → "Android" → "Run workflow" (in quel caso l'APK resta come file scaricabile
+# nella pagina dell'esecuzione, senza toccare nessuna release).
+#
+# Richiede 3 secret nel repository (vedi la guida): ANDROID_KEYSTORE_BASE64,
+# ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS.
+name: Android
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  # L'app Android controlla gli aggiornamenti leggendo android.json dall'ultima release
+  VITE_UPDATE_MANIFEST_URL: https://github.com/${{ github.repository }}/releases/latest/download/android.json
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Controllo dei secret di firma
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          for v in KS_B64 KS_PASS KEY_ALIAS; do
+            if [ -z "${!v}" ]; then
+              echo "::error::Manca il secret per $v. Aggiungi ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD e ANDROID_KEY_ALIAS in Settings → Secrets and variables → Actions."
+              exit 1
+            fi
+          done
+
+      - name: Il tag deve coincidere con la versione dell'app
+        if: github.ref_type == 'tag'
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./package.json').version")
+          TAURI=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "tag=$TAG package.json=$PKG tauri.conf.json=$TAURI"
+          [ "$TAG" = "$PKG" ] && [ "$TAG" = "$TAURI" ] || { echo "::error::Versioni non allineate"; exit 1; }
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: android-actions/setup-android@v3
+
+      - name: SDK e NDK di Android
+        run: |
+          sdkmanager "platforms;android-36" "build-tools;35.0.0" "ndk;27.0.12077973"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: swatinem/rust-cache@v2
+        with: { workspaces: "src-tauri -> target" }
+
+      - run: npm ci
+
+      - name: Compila l'APK (telefoni a 64 bit)
+        run: |
+          npx tauri android init --ci
+          npx tauri android build --apk --target aarch64 --ci
+
+      - name: Allinea e firma l'APK
+        id: sign
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          BT="$ANDROID_HOME/build-tools/35.0.0"
+          UNSIGNED=$(find src-tauri/gen/android -name "*release-unsigned.apk" | head -n1)
+          if [ -z "$UNSIGNED" ]; then
+            echo "::error::APK non trovato dopo la compilazione"
+            find src-tauri/gen/android -name "*.apk" || true
+            exit 1
+          fi
+          echo "APK non firmato: $UNSIGNED"
+          "$BT/zipalign" -f -p 4 "$UNSIGNED" "$RUNNER_TEMP/aligned.apk"
+          "$BT/apksigner" sign --ks "$RUNNER_TEMP/release.jks" --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KS_PASS --key-pass env:KS_PASS \
+            --out "DungeonCompanion-$VER.apk" "$RUNNER_TEMP/aligned.apk"
+          "$BT/apksigner" verify --print-certs "DungeonCompanion-$VER.apk"
+          rm -f "$RUNNER_TEMP/release.jks"
+          echo "apk=DungeonCompanion-$VER.apk" >> "$GITHUB_OUTPUT"
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: ${{ steps.sign.outputs.apk }}
+          retention-days: 14
+
+      - name: Allega l'APK alla release e pubblica android.json
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APK: ${{ steps.sign.outputs.apk }}
+          VER: ${{ steps.sign.outputs.ver }}
+        run: |
+          # la release la crea il workflow "Release" (o tu dal sito): si aspetta che esista
+          for i in $(seq 1 60); do
+            gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && break
+            echo "Attendo la creazione della release… ($i)"
+            sleep 30
+          done
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${APK}"
+          jq -n --arg v "$VER" --arg u "$URL" '{version: $v, android_apk_url: $u}' > android.json
+          gh release upload "$GITHUB_REF_NAME" "$APK" android.json --clobber

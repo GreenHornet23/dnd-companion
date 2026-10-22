@@ -5,6 +5,7 @@ import { useCampaign } from "../lib/hooks";
 import { CELL, ERASE_CODE, TILES, canvasToBlob, defaultGrid, defaultTile, drawGrid, renderToCanvas } from "../lib/gridRender";
 import { DEFAULT_ROOMS, SIZES, SIZE_LABEL, fromRows, generate, randomSeed, toRows, type Cells, type SizeKey } from "../lib/gridGen";
 import { Field, Modal } from "../components/ui";
+import { isAndroid, isIos, isTauri } from "../lib/platform";
 import type { GridMap, GridTheme } from "../lib/types";
 
 type Tool = "pencil" | "eraser" | "line" | "rect" | "outline" | "fill" | "pan";
@@ -377,7 +378,7 @@ function Editor({ cid, mapId, name, grid }: { cid: string; mapId: string; name: 
         <input className="title-input" value={title} aria-label="Nome della mappa"
           onChange={(e) => { setTitle(e.target.value); titleRef.current = e.target.value; touch(); }} />
         <button onClick={() => setGenOpen(true)}>🎲 Genera…</button>
-        <button onClick={exportPng}>⬇ PNG</button>
+        {!(isTauri() && (isAndroid() || isIos())) && <button onClick={exportPng}>⬇ PNG</button>}
       </div>
 
       <div className="tool-row">

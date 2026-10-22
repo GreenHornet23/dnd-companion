@@ -1,43 +1,33 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore, getAssetBlob, getLocalBook, putLocalBook, delLocalBook, listLocalBooks } from "../lib/store";
 import { useCampaign } from "../lib/hooks";
+import { PdfViewer } from "../components/PdfViewer";
 import { Empty, Modal, confirmDo, notify } from "../components/ui";
 import { uid } from "../lib/id";
 import type { BookSlot } from "../lib/types";
 
 function Viewer({ cid, slot, onClose }: { cid: string; slot: BookSlot; onClose: () => void }) {
-  const [url, setUrl] = useState<string>();
+  const [blob, setBlob] = useState<Blob>();
   const [error, setError] = useState<string>();
   useEffect(() => {
-    let cur: string | undefined;
     let dead = false;
     (async () => {
       try {
         const local = await getLocalBook(cid, slot.id);
-        const blob = local?.blob ?? (slot.assetId ? await getAssetBlob(cid, slot.assetId) : undefined);
+        const b = local?.blob ?? (slot.assetId ? await getAssetBlob(cid, slot.assetId) : undefined);
         if (dead) return;
-        if (!blob) return setError("File non disponibile su questo dispositivo");
-        cur = URL.createObjectURL(blob);
-        setUrl(cur);
+        if (!b) return setError("File non disponibile su questo dispositivo");
+        setBlob(b);
       } catch (e) {
         if (!dead) setError((e as Error).message);
       }
     })();
-    return () => {
-      dead = true;
-      if (cur) URL.revokeObjectURL(cur);
-    };
+    return () => { dead = true; };
   }, [cid, slot.id, slot.assetId]);
+  if (blob) return <PdfViewer blob={blob} title={slot.title} id={`${cid}:${slot.id}`} onClose={onClose} />;
   return (
-    <Modal title={slot.title} onClose={onClose} wide>
-      {error && <p className="error">{error}</p>}
-      {!url && !error && <p className="muted">Apro il file…</p>}
-      {url && (
-        <>
-          <iframe className="pdf" src={url} title={slot.title} />
-          <p className="muted"><a href={url} target="_blank" rel="noreferrer">Apri a schermo intero</a></p>
-        </>
-      )}
+    <Modal title={slot.title} onClose={onClose}>
+      {error ? <p className="error">{error}</p> : <p className="muted">Scarico il file dal server…</p>}
     </Modal>
   );
 }

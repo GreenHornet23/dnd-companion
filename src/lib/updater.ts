@@ -5,6 +5,8 @@
  *    (Android chiede di consentire l'installazione da questa origine).
  *  - iOS: non è possibile installare fuori da App Store/TestFlight: l'avviso porta al link di distribuzione.
  */
+import { isAndroid, isIos, isTauri, openExternal } from "./platform";
+
 export interface UpdateInfo {
   version: string;
   notes?: string;
@@ -13,10 +15,6 @@ export interface UpdateInfo {
   install(onProgress?: (pct: number | null) => void): Promise<void>;
 }
 
-const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-const ua = () => navigator.userAgent.toLowerCase();
-const isAndroid = () => ua().includes("android");
-const isIos = () => /iphone|ipad|ipod/.test(ua());
 
 function newer(remote: string, current: string): boolean {
   const p = (v: string) => v.replace(/^v/, "").split(/[.-]/).map((n) => parseInt(n, 10) || 0);
@@ -73,7 +71,7 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
       mode: "link",
       url: link,
       async install() {
-        if (link) window.open(link, "_blank");
+        if (link) await openExternal(link);
       },
     };
   } catch {

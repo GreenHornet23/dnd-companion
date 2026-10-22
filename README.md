@@ -63,7 +63,8 @@ git push && git push --tags  # parte la GitHub Action
 La Action compila Windows, macOS (Apple Silicon e Intel) e Linux, firma gli installer, crea la release e pubblica `latest.json`. L'indirizzo del repository nell'updater viene impostato in automatico in CI (`OWNER/REPO`).
 
 - **Desktop**: l'avviso installa e riavvia da solo.
-- **Android** (opzionale): variabile `BUILD_ANDROID=true` e secret `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`. L'APK firmato viene allegato alla release e l'avviso apre il download.
+- **Android**: workflow separato `.github/workflows/android.yml` (parte con lo stesso tag `v*`, o a mano da Actions). Richiede i secret `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`. Allega alla release l'APK firmato e `android.json` (usato dall'avviso di aggiornamento, che apre il download). Conserva il keystore: serve identico a ogni versione per poter aggiornare l'app.
+- **Manuali PDF**: letti con pdf.js (funziona anche nel WebView Android); i file di supporto vengono copiati in `public/pdfjs` da `scripts/copy-pdfjs.mjs`.
 - **iOS**: Apple non permette installazioni fuori da App Store/TestFlight; serve un account Apple Developer.
 - Le build macOS non firmate/notarizzate mostrano l'avviso di Gatekeeper (per toglierlo servono i certificati Apple, a pagamento).
 
