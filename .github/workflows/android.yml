@@ -83,6 +83,7 @@ jobs:
         run: |
           VER=$(node -p "require('./package.json').version")
           KS_PASS="$(printf %s "$KS_PASS" | tr -d '\r\n ')"; KEY_ALIAS="$(printf %s "$KEY_ALIAS" | tr -d '\r\n ')"
+          KS_PASS="${KS_PASS#ANDROID_KEYSTORE_PASSWORD=}"; KEY_ALIAS="${KEY_ALIAS#ANDROID_KEY_ALIAS=}"
           export KS_PASS
           printf %s "$KS_B64" | tr -d '\r\n ' | base64 -d > "$RUNNER_TEMP/release.jks" || { echo "::error::ANDROID_KEYSTORE_BASE64 non valido"; exit 1; }
           BT="$ANDROID_HOME/build-tools/35.0.0"
