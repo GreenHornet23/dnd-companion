@@ -51,11 +51,14 @@ jobs:
         with: { node-version: 22, cache: npm }
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 17 }
-      - uses: android-actions/setup-android@v3
-
       - name: SDK e NDK di Android
         run: |
-          sdkmanager "platforms;android-36" "build-tools;35.0.0" "ndk;27.0.12077973"
+          # L'SDK Android è già installato sul runner ubuntu-24.04
+          export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKM="$(ls "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | head -1)"
+          yes | "$SDKM" --licenses >/dev/null || true
+          "$SDKM" "platforms;android-36" "build-tools;35.0.0" "ndk;27.0.12077973"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
