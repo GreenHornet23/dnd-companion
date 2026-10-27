@@ -7,6 +7,7 @@ import { ABILITIES, CLASSES, derive, findClass, fmt, racesFor } from "../lib/rul
 import { buildCharacterPrompt, equippedSummary, PORTRAIT_STYLES } from "../lib/aiPrompt";
 import type { Character, Item, Spell } from "../lib/types";
 import { uid } from "../lib/id";
+import { SpellBrowser } from "../components/SpellBrowser";
 
 type Tab = "sheet" | "spells" | "inventory" | "story" | "portrait";
 const TABS: [Tab, string][] = [["sheet", "Scheda"], ["spells", "Incantesimi"], ["inventory", "Inventario"], ["story", "Storia"], ["portrait", "Ritratto"]];
@@ -166,6 +167,8 @@ function SpellsTab({ c, set, ruleset, auto }: TabProps & { ruleset: string; auto
   const d = useMemo(() => derive(c, ruleset), [c, ruleset]);
   const [name, setName] = useState("");
   const [lvl, setLvl] = useState(0);
+  const [browse, setBrowse] = useState(false);
+  const [openSpell, setOpenSpell] = useState<string>();
   const info = d.spell?.info;
   if (!auto) return <p className="note">Lo spellsheet automatico è disponibile per la 5ª edizione.</p>;
   const used = (i: number) => c.slotsUsed[i] ?? 0;
@@ -221,17 +224,30 @@ function SpellsTab({ c, set, ruleset, auto }: TabProps & { ruleset: string; auto
             {Array.from({ length: 9 }, (_, i) => <option key={i} value={i + 1}>Livello {i + 1}</option>)}
           </select>
           <button disabled={!name.trim()} onClick={() => { set({ spells: [...c.spells, { id: uid(), name: name.trim(), level: lvl, prepared: false, notes: "" }] }); setName(""); }}>Aggiungi</button>
+          <button className="ghost" onClick={() => setBrowse(true)}>📖 Dai manuali</button>
         </div>
+        {browse && <SpellBrowser className={c.className} known={c.spells} onAdd={(sp) => set({ spells: [...c.spells, sp] })} onClose={() => setBrowse(false)} />}
         {spells.length === 0 && <Empty>Nessun incantesimo.</Empty>}
         <ul className="plain tight">
           {spells.map((s) => (
-            <li key={s.id} className="row between">
+            <li key={s.id} className="row between wrap">
               <label className="check"><input type="checkbox" checked={s.prepared} onChange={(e) => upd(s, { prepared: e.target.checked })} /> <b>{s.name}</b> <small className="muted">{s.level === 0 ? "trucchetto" : `liv. ${s.level}`}</small></label>
-              <button className="ghost" aria-label="Rimuovi" onClick={() => set({ spells: c.spells.filter((x) => x.id !== s.id) })}>✕</button>
+              <span className="row gap">
+                {s.text && <button className="ghost" aria-label="Dettagli" onClick={() => setOpenSpell(openSpell === s.id ? undefined : s.id)}>ⓘ</button>}
+                <button className="ghost" aria-label="Rimuovi" onClick={() => set({ spells: c.spells.filter((x) => x.id !== s.id) })}>✕</button>
+              </span>
+              {openSpell === s.id && s.text && (
+                <div className="note" style={{ width: "100%" }}>
+                  <div><b>Lancio:</b> {s.casting} · <b>Gittata:</b> {s.range} · <b>Durata:</b> {s.duration}</div>
+                  <div><b>Componenti:</b> {s.components}</div>
+                  <p>{s.text}</p>
+                  {s.source && <small className="muted">{s.source}</small>}
+                </div>
+              )}
             </li>
           ))}
         </ul>
-        <small className="muted">Gli incantesimi razziali e di sottoclasse vanno inseriti a mano. L'elenco automatico dai manuali PDF è previsto in una fase successiva.</small>
+        <small className="muted">Gli incantesimi razziali e di sottoclasse vanno inseriti a mano. Con «Dai manuali» scegli gli incantesimi leggendoli dai PDF che hai caricato.</small>
       </section>
     </>
   );

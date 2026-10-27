@@ -34,6 +34,14 @@ export interface Spell {
   level: number; // 0 = trucchetto
   prepared: boolean;
   notes: string;
+  /** Dati presi dal manuale PDF (facoltativi) */
+  school?: string;
+  casting?: string;
+  range?: string;
+  components?: string;
+  duration?: string;
+  text?: string;
+  source?: string;
 }
 
 export interface Character extends Entity {
