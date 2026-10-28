@@ -130,6 +130,71 @@ export function parseSpellLines(lines: Line[]): SpellRef[] {
   return out.sort((a, b) => a.level - b.level || a.name.localeCompare(b.name));
 }
 
+export interface TextItem { str: string; x: number; y: number; w: number; h: number }
+
+/**
+ * Mette in ordine di lettura gli elementi di testo di una pagina, anche su due colonne:
+ * le righe a tutta larghezza (titoli) dividono la pagina in fasce; in ogni fascia si legge prima la colonna sinistra, poi la destra.
+ */
+export function orderPageItems(items: TextItem[], pageW: number): string[] {
+  const its = items.filter((i) => i.str.trim());
+  if (!its.length) return [];
+  const mid = pageW / 2;
+  const tol = 4;
+  const kind = (i: TextItem): "L" | "R" | "F" => {
+    const x1 = i.x + i.w;
+    if (i.x < mid - tol && x1 > mid + tol) return "F"; // attraversa il centro
+    return x1 <= mid + tol ? "L" : "R";
+  };
+  const ks = its.map(kind);
+  const nL = ks.filter((k) => k === "L").length, nR = ks.filter((k) => k === "R").length, nF = ks.filter((k) => k === "F").length;
+  const two = nL >= 8 && nR >= 8 && nL + nR >= 0.6 * its.length && nF <= 0.25 * its.length;
+
+  const toLines = (arr: TextItem[]): { y: number; text: string }[] => {
+    const sorted = [...arr].sort((a, b) => b.y - a.y || a.x - b.x);
+    const rows: { y: number; items: TextItem[] }[] = [];
+    for (const it of sorted) {
+      const row = rows[rows.length - 1];
+      const t = Math.max(2, (it.h || 8) * 0.35);
+      if (row && Math.abs(row.y - it.y) <= t) row.items.push(it);
+      else rows.push({ y: it.y, items: [it] });
+    }
+    return rows.map((r) => {
+      r.items.sort((a, b) => a.x - b.x);
+      let text = "", prevEnd = -1e9;
+      for (const it of r.items) {
+        const gap = it.x - prevEnd;
+        if (text && gap > (it.h || 8) * 0.15 && !text.endsWith(" ") && !it.str.startsWith(" ")) text += " ";
+        text += it.str;
+        prevEnd = it.x + it.w;
+      }
+      return { y: r.y, text: text.trim() };
+    }).filter((r) => r.text);
+  };
+
+  if (!two) return toLines(its).map((l) => l.text);
+
+  // Fasce delimitate dagli elementi a tutta larghezza
+  const full = its.filter((_, n) => ks[n] === "F");
+  const fullLines = toLines(full);
+  const cuts = fullLines.map((l) => l.y).sort((a, b) => b - a);
+  const out: string[] = [];
+  const side = its.filter((_, n) => ks[n] !== "F");
+  const band = (hi: number, lo: number) => {
+    const inBand = side.filter((i) => i.y < hi && i.y >= lo);
+    const left = inBand.filter((i) => kind(i) === "L"), right = inBand.filter((i) => kind(i) === "R");
+    out.push(...toLines(left).map((l) => l.text), ...toLines(right).map((l) => l.text));
+  };
+  let hi = Infinity;
+  for (let n = 0; n < cuts.length; n++) {
+    band(hi, cuts[n] + 0.01);
+    out.push(fullLines.find((l) => l.y === cuts[n])!.text);
+    hi = cuts[n];
+  }
+  band(hi, -Infinity);
+  return out;
+}
+
 /** Estrae il testo di tutte le pagine, riga per riga */
 export async function extractLines(blob: Blob, onProgress?: (done: number, total: number) => void, signal?: { cancelled: boolean }): Promise<{ lines: Line[]; pages: number }> {
   const task = pdfjs.getDocument({ range: new BlobRange(blob), rangeChunkSize: 1 << 20, disableAutoFetch: true, ...ASSETS });
@@ -140,18 +205,13 @@ export async function extractLines(blob: Blob, onProgress?: (done: number, total
       if (signal?.cancelled) break;
       const page = await pdf.getPage(p);
       const tc = await page.getTextContent();
-      let buf = "";
-      let lastY: number | undefined;
-      const flush = () => { if (buf.trim()) lines.push({ text: buf, page: p }); buf = ""; };
+      const items: TextItem[] = [];
       for (const it of tc.items) {
         if (!("str" in it)) continue;
-        const y = it.transform[5] as number;
-        if (lastY !== undefined && Math.abs(y - lastY) > 2) flush();
-        buf += it.str;
-        lastY = y;
-        if (it.hasEOL) { flush(); lastY = undefined; }
+        items.push({ str: it.str, x: it.transform[4] as number, y: it.transform[5] as number, w: it.width, h: it.height || Math.abs(it.transform[3] as number) });
       }
-      flush();
+      const view = page.view as number[];
+      for (const text of orderPageItems(items.map((i) => ({ ...i, x: i.x - view[0] })), view[2] - view[0])) lines.push({ text, page: p });
       page.cleanup();
       onProgress?.(p, pdf.numPages);
       if (p % 10 === 0) await new Promise((r) => setTimeout(r));
@@ -162,9 +222,24 @@ export async function extractLines(blob: Blob, onProgress?: (done: number, total
   return { lines, pages: pdf.numPages };
 }
 
+/** Toglie intestazioni e numeri di pagina, che si ripetono quasi identici su molte pagine e finirebbero dentro il testo degli incantesimi */
+export function dropRunningLines(lines: Line[], pages: number): Line[] {
+  if (pages < 6) return lines;
+  const norm = (t: string) => t.replace(/\d+/g, "#").replace(/\s+/g, " ").trim().toLowerCase();
+  const seen = new Map<string, Set<number>>();
+  for (const l of lines) {
+    if (l.text.length > 60) continue;
+    const k = norm(l.text);
+    if (!seen.has(k)) seen.set(k, new Set());
+    seen.get(k)!.add(l.page);
+  }
+  const limit = Math.max(4, pages * 0.3);
+  return lines.filter((l) => l.text.length > 60 || (seen.get(norm(l.text))?.size ?? 0) < limit || /:\s*\S/.test(l.text) || !!parseHeader(l.text));
+}
+
 export async function indexBook(blob: Blob, bookId: string, onProgress?: (done: number, total: number) => void, signal?: { cancelled: boolean }): Promise<SpellIndex> {
   const { lines, pages } = await extractLines(blob, onProgress, signal);
-  return { bookId, indexedAt: Date.now(), pages, spells: parseSpellLines(lines) };
+  return { bookId, indexedAt: Date.now(), pages, spells: parseSpellLines(dropRunningLines(lines, pages)) };
 }
 
 const key = (cid: string, slotId: string) => `spells:${cid}:${slotId}`;
