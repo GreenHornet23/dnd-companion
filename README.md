@@ -87,3 +87,8 @@ Prerequisiti di compilazione (Tauri):
 3. Lettura dei PDF per precompilare incantesimi, razze e classi.
 4. Ruoli (DM/giocatore) e visibilità selettiva delle note.
 5. Moduli di regole per le altre edizioni.
+
+## Versione web e ritratti AI
+
+- **App web installabile (PWA)**: lo stesso Worker del server di sincronizzazione serve anche l'app (cartella `dist`). Per pubblicarla/aggiornarla, dalla cartella principale: `npm run deploy:web` (compila l'app e fa il deploy del Worker). Si apre all'indirizzo `https://<nome>.workers.dev/`; da iPhone/Android: Condividi → Aggiungi a Home. Funziona anche offline dopo la prima visita.
+- **Ritratti AI**: endpoint `POST /c/<id>/ai/portrait` (stessa autenticazione della campagna) che usa Cloudflare Workers AI (modello FLUX.1 schnell, con traduzione automatica del prompt dall'italiano). Il piano gratuito ha un limite giornaliero; richiede che la campagna sia collegata al server.

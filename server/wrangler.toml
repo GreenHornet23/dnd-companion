@@ -13,6 +13,17 @@ migrations_dir = "migrations"
 binding = "BLOBS"
 bucket_name = "dungeon-companion-blobs"
 
+# Generazione immagini dei ritratti (piano gratuito giornaliero limitato)
+[ai]
+binding = "AI"
+
+# L'app web (installabile come PWA) è servita dallo stesso Worker: prima `npm run build` nella cartella principale.
+[assets]
+directory = "../dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/c", "/c/*", "/health"]
+
 [vars]
 # Spazio massimo di file (PDF, mappe, ritratti) per campagna, in byte: 3 GB
 # (lo spazio R2 gratuito è 10 GB in totale: se hai più campagne abbassalo)

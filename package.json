@@ -1,14 +1,15 @@
 {
   "name": "dnd-companion",
   "private": true,
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "scripts": {
     "dev": "node scripts/copy-pdfjs.mjs && vite",
     "build": "node scripts/copy-pdfjs.mjs && tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "release": "node scripts/release.mjs"
+    "release": "node scripts/release.mjs",
+    "deploy:web": "npm run build && cd server && npx wrangler deploy"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

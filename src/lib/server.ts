@@ -166,3 +166,13 @@ export function decodeInvite(code: string): { cfg: SyncCfg; id: string } {
     throw new Error("Codice d'invito non valido");
   }
 }
+
+/** Genera un ritratto sul server (Cloudflare Workers AI). Ritorna l'immagine JPEG. */
+export async function generatePortrait(cfg: SyncCfg, cid: string, prompt: string, seed?: number): Promise<Blob> {
+  const res = await send(`${normalizeUrl(cfg.url)}/c/${cid}/ai/portrait`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...auth(cfg) },
+    body: JSON.stringify({ prompt, seed }),
+  });
+  return new Blob([await res.arrayBuffer()], { type: "image/jpeg" });
+}

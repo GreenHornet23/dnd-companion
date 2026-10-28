@@ -51,6 +51,8 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
       };
     }
 
+    // Nel browser la versione web si aggiorna da sola: nessun avviso
+    if (!isTauri()) return null;
     const url = import.meta.env.VITE_UPDATE_MANIFEST_URL;
     if (!url) return null;
     const res = await fetch(url, { cache: "no-store" });

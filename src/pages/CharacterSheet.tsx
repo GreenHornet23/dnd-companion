@@ -7,6 +7,7 @@ import { ABILITIES, CLASSES, derive, findClass, fmt, racesFor } from "../lib/rul
 import { buildCharacterPrompt, equippedSummary, PORTRAIT_STYLES } from "../lib/aiPrompt";
 import type { Character, Item, Spell } from "../lib/types";
 import { uid } from "../lib/id";
+import { generatePortrait } from "../lib/server";
 import { SpellBrowser } from "../components/SpellBrowser";
 
 type Tab = "sheet" | "spells" | "inventory" | "story" | "portrait";
@@ -316,7 +317,32 @@ function StoryTab({ c, set }: TabProps) {
 
 function PortraitTab({ c, set, cid }: TabProps & { cid: string }) {
   const addAsset = useStore((s) => s.addAsset);
+  const { campaign } = useCampaign();
+  const sync = campaign?.sync;
   const fileRef = useRef<HTMLInputElement>(null);
+  const [gen, setGen] = useState<{ blob: Blob; url: string; prompt: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [genError, setGenError] = useState("");
+  const generate = async () => {
+    if (!sync) return;
+    setBusy(true);
+    setGenError("");
+    try {
+      const blob = await generatePortrait(sync, cid, shown);
+      setGen((old) => { if (old) URL.revokeObjectURL(old.url); return { blob, url: URL.createObjectURL(blob), prompt: shown }; });
+    } catch (e) {
+      setGenError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const saveGen = async () => {
+    if (!gen) return;
+    const a = await addAsset(cid, gen.blob, `${c.name || "ritratto"}.jpg`);
+    set({ portraits: [...c.portraits, { id: uid(), assetId: a.id, prompt: gen.prompt, createdAt: Date.now() }] });
+    URL.revokeObjectURL(gen.url);
+    setGen(null);
+  };
   const [style, setStyle] = useState(PORTRAIT_STYLES[0].id);
   const [desc, setDesc] = useState(c.appearance);
   const generated = useMemo(() => buildCharacterPrompt(c, desc, style), [c, desc, style]);
@@ -327,10 +353,10 @@ function PortraitTab({ c, set, cid }: TabProps & { cid: string }) {
   return (
     <>
       <section className="card">
-        <h2>Generatore di ritratti <span className="tag">in arrivo</span></h2>
+        <h2>Generatore di ritratti</h2>
         <p className="muted">
-          L'interfaccia è pronta; la generazione vera e propria verrà collegata quando avremo scelto il servizio di immagini.
-          Il prompt qui sotto si costruisce già da descrizione, razza, classe ed equipaggiamento in uso.
+          Il prompt si costruisce da descrizione, razza, classe ed equipaggiamento in uso; puoi modificarlo a mano e rigenerare finché il risultato ti piace.
+          {!sync && " Per generare le immagini la campagna deve essere collegata al server del party (Impostazioni)."}
         </p>
         <Field label="Descrizione"><textarea rows={3} value={desc} onChange={(e) => { setDesc(e.target.value); setPrompt(null); }} placeholder="Capelli rossi intrecciati, cicatrice sull'occhio sinistro, sguardo severo…" /></Field>
         <Field label="Stile">
@@ -346,10 +372,20 @@ function PortraitTab({ c, set, cid }: TabProps & { cid: string }) {
           <textarea rows={6} value={shown} onChange={(e) => setPrompt(e.target.value)} />
         </Field>
         <div className="row gap wrap">
-          <button className="primary" disabled title="Servizio di generazione non ancora collegato">✨ Genera ritratto</button>
+          <button className="primary" disabled={!sync || busy || shown.trim().length < 5} onClick={generate}>{busy ? "Genero…" : gen ? "✨ Rigenera" : "✨ Genera ritratto"}</button>
           <button onClick={() => navigator.clipboard?.writeText(shown)}>Copia prompt</button>
           {prompt !== null && <button className="ghost" onClick={() => setPrompt(null)}>Ripristina</button>}
         </div>
+        {genError && <p className="error">{genError}</p>}
+        {gen && (
+          <figure className="gen-result">
+            <img src={gen.url} alt="Ritratto generato" style={{ maxWidth: "100%", borderRadius: 8 }} />
+            <figcaption className="row gap wrap">
+              <button className="primary" onClick={saveGen}>Salva tra le immagini</button>
+              <button className="ghost" onClick={() => { URL.revokeObjectURL(gen.url); setGen(null); }}>Scarta</button>
+            </figcaption>
+          </figure>
+        )}
       </section>
 
       <section className="card">

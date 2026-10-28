@@ -8,6 +8,7 @@
 export interface Env {
   DB: D1Database;
   BLOBS: R2Bucket;
+  AI?: Ai;
   CREATE_KEY?: string;
   MAX_CAMPAIGN_BYTES?: string;
 }
@@ -233,13 +234,39 @@ async function deleteCampaign(env: Env, id: string) {
   return json({ ok: true });
 }
 
+// ---- Generazione ritratti (Cloudflare Workers AI) ----
+const IMG_MODEL = "@cf/black-forest-labs/flux-1-schnell";
+async function portrait(req: Request, env: Env): Promise<Response> {
+  if (!env.AI) return fail(501, "Generazione immagini non attiva sul server (manca il collegamento AI)");
+  let body: { prompt?: unknown; seed?: unknown };
+  try { body = await req.json(); } catch { return fail(400, "Richiesta non valida"); }
+  const raw = typeof body.prompt === "string" ? body.prompt.trim().slice(0, 1200) : "";
+  if (raw.length < 5) return fail(400, "Descrizione troppo corta");
+  // Il modello capisce meglio l'inglese: traduco dall'italiano, e se fallisce uso il testo originale.
+  let prompt = raw;
+  try {
+    const tr = (await env.AI.run("@cf/meta/m2m100-1.2b" as never, { text: raw, source_lang: "italian", target_lang: "english" } as never)) as { translated_text?: string };
+    if (tr?.translated_text && tr.translated_text.length > 10) prompt = tr.translated_text;
+  } catch { /* uso il testo originale */ }
+  const seed = typeof body.seed === "number" && Number.isFinite(body.seed) ? Math.floor(body.seed) % 2_000_000_000 : Math.floor(Math.random() * 1_000_000_000);
+  try {
+    const out = (await env.AI.run(IMG_MODEL as never, { prompt: prompt.slice(0, 1800), steps: 6, seed } as never)) as { image?: string };
+    if (!out?.image) return fail(502, "Il servizio di immagini non ha risposto");
+    const bin = Uint8Array.from(atob(out.image), (c) => c.charCodeAt(0));
+    return new Response(bin, { headers: { "Content-Type": "image/jpeg", "Cache-Control": "no-store", ...CORS } });
+  } catch (e) {
+    console.error(e);
+    return fail(502, "Generazione non riuscita (forse hai finito il limite giornaliero gratuito): riprova più tardi");
+  }
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
     const url = new URL(req.url);
     const parts = url.pathname.split("/").filter(Boolean);
     try {
-      if (parts.length === 0) return json({ ok: true, service: "dungeon-companion-sync" });
+      if (parts.length === 0 || parts[0] === "health") return json({ ok: true, service: "dungeon-companion-sync" });
       if (parts[0] !== "c") return fail(404, "Non trovato");
       if (parts.length === 1 && req.method === "POST") return await createCampaign(req, env);
 
@@ -248,6 +275,7 @@ export default {
       if (!(await authorized(req, env, id))) return fail(401, "Non autorizzato");
 
       if (parts.length === 2 && req.method === "DELETE") return await deleteCampaign(env, id);
+      if (parts[2] === "ai" && parts[3] === "portrait" && req.method === "POST") return await portrait(req, env);
       if (parts[2] === "sync" && req.method === "POST") return await syncHandler(req, env, id);
       if (parts[2] === "blob" && parts[3] && ID_RE.test(parts[3])) {
         const asset = parts[3];
