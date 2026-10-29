@@ -1,7 +1,7 @@
 {
   "name": "dnd-companion",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.1.6",
   "type": "module",
   "scripts": {
     "dev": "node scripts/copy-pdfjs.mjs && vite",
@@ -16,11 +16,14 @@
     "@tauri-apps/plugin-opener": "^2.7.2",
     "@tauri-apps/plugin-process": "^2",
     "@tauri-apps/plugin-updater": "^2",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@tesseract.js-data/ita": "^1.0.0",
     "idb-keyval": "^6",
     "pdfjs-dist": "^6.4.299",
     "react": "^19",
     "react-dom": "^19",
     "react-router-dom": "^7",
+    "tesseract.js": "^7.0.0",
     "zustand": "^5"
   },
   "devDependencies": {

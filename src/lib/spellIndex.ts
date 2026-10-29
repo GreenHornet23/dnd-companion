@@ -3,6 +3,7 @@
 // poi "Tempo di lancio / Gittata / Componenti / Durata". Funziona solo su PDF con testo selezionabile (non scansioni).
 import { get as idbGet, set as idbSet, del as idbDel } from "idb-keyval";
 import { pdfjs, BlobRange, ASSETS } from "./pdfDoc";
+import { createOcr, type Ocr, type OcrLang } from "./ocr";
 
 export interface SpellRef {
   id: string;
@@ -23,7 +24,20 @@ export interface SpellIndex {
   bookId: string;
   indexedAt: number;
   pages: number;
+  /** pagine senza testo selezionabile (immagini) */
+  scannedPages: number;
+  /** pagine lette con l'OCR */
+  ocrPages: number;
   spells: SpellRef[];
+}
+
+export interface OcrOptions {
+  lang: OcrLang;
+  from: number;
+  to: number;
+  /** la pagina ha due colonne: si legge prima la sinistra, poi la destra */
+  twoColumns: boolean;
+  cache?: { get(page: number): Promise<string[] | undefined>; set(page: number, lines: string[]): Promise<void> };
 }
 
 export interface Line { text: string; page: number }
@@ -52,10 +66,10 @@ export const normClass = (s: string) => {
   return it ?? s.trim();
 };
 
-const CASTING_RE = /^(casting time|tempo di lancio|tempo di esecuzione)\s*:?\s*/i;
-const RANGE_RE = /^(range|gittata|raggio)\s*:?\s*/i;
-const COMP_RE = /^(components|componenti)\s*:?\s*/i;
-const DUR_RE = /^(duration|durata)\s*:?\s*/i;
+const CASTING_RE = /^(casting\s*t[il1]me|tempo\s*di\s*lancio|tempo\s*di\s*esecuzione)\s*[:;.]?\s*/i;
+const RANGE_RE = /^(range|gittata|raggio)\s*[:;.]?\s*/i;
+const COMP_RE = /^(components|componenti)\s*[:;.]?\s*/i;
+const DUR_RE = /^(duration|durata)\s*[:;.]?\s*/i;
 
 export function parseHeader(raw: string): { level: number; school: string; classes: string[]; ritual: boolean } | null {
   const line = raw.replace(/\s+/g, " ").trim();
@@ -67,7 +81,7 @@ export function parseHeader(raw: string): { level: number; school: string; class
   let level: number | undefined;
   if (/cantrip|trucchett/.test(lower)) level = 0;
   else {
-    const m = lower.match(/(\d)\s*(?:st|nd|rd|th|°|º|ª|a)?[\s-]*(?:level|livello)/) ?? lower.match(/(?:level|livello)\s*(\d)/);
+    const m = lower.match(/(\d)\s*(?:st|nd|rd|th|°|º|ª|a)?[\s-]*(?:level|l[il1]vello)/) ?? lower.match(/(?:level|l[il1]vello)\s*(\d)/);
     if (m) level = +m[1];
   }
   if (level === undefined || level > 9) return null;
@@ -195,11 +209,36 @@ export function orderPageItems(items: TextItem[], pageW: number): string[] {
   return out;
 }
 
+/** Disegna la pagina e la legge con l'OCR; con due colonne legge prima la metà sinistra, poi la destra */
+async function ocrPage(page: Awaited<ReturnType<import("./pdfDoc").PDFDocumentProxy["getPage"]>>, ocr: Ocr, twoColumns: boolean): Promise<string[]> {
+  const base = page.getViewport({ scale: 1 });
+  const scale = Math.min(4, Math.max(1.5, 2200 / base.width));
+  const vp = page.getViewport({ scale });
+  const cv = document.createElement("canvas");
+  cv.width = Math.floor(vp.width);
+  cv.height = Math.floor(vp.height);
+  await page.render({ canvas: cv, viewport: vp }).promise;
+  if (!twoColumns) return ocr.read(cv);
+  const half = Math.floor(cv.width / 2);
+  const out: string[] = [];
+  for (const [x0, w] of [[0, half], [half, cv.width - half]] as const) {
+    const part = document.createElement("canvas");
+    part.width = w;
+    part.height = cv.height;
+    part.getContext("2d")!.drawImage(cv, x0, 0, w, cv.height, 0, 0, w, cv.height);
+    out.push(...(await ocr.read(part)));
+  }
+  cv.width = cv.height = 0;
+  return out;
+}
+
 /** Estrae il testo di tutte le pagine, riga per riga */
-export async function extractLines(blob: Blob, onProgress?: (done: number, total: number) => void, signal?: { cancelled: boolean }): Promise<{ lines: Line[]; pages: number }> {
+export async function extractLines(blob: Blob, onProgress?: (done: number, total: number) => void, signal?: { cancelled: boolean }, ocrOpts?: OcrOptions): Promise<{ lines: Line[]; pages: number; scannedPages: number; ocrPages: number }> {
   const task = pdfjs.getDocument({ range: new BlobRange(blob), rangeChunkSize: 1 << 20, disableAutoFetch: true, ...ASSETS });
   const pdf = await task.promise;
   const lines: Line[] = [];
+  let scannedPages = 0, ocrPages = 0;
+  let ocr: Ocr | undefined;
   try {
     for (let p = 1; p <= pdf.numPages; p++) {
       if (signal?.cancelled) break;
@@ -211,15 +250,31 @@ export async function extractLines(blob: Blob, onProgress?: (done: number, total
         items.push({ str: it.str, x: it.transform[4] as number, y: it.transform[5] as number, w: it.width, h: it.height || Math.abs(it.transform[3] as number) });
       }
       const view = page.view as number[];
-      for (const text of orderPageItems(items.map((i) => ({ ...i, x: i.x - view[0] })), view[2] - view[0])) lines.push({ text, page: p });
+      const chars = items.reduce((n, i) => n + i.str.trim().length, 0);
+      if (chars >= 25) {
+        for (const text of orderPageItems(items.map((i) => ({ ...i, x: i.x - view[0] })), view[2] - view[0])) lines.push({ text, page: p });
+      } else {
+        scannedPages++;
+        if (ocrOpts && p >= ocrOpts.from && p <= ocrOpts.to) {
+          let got = await ocrOpts.cache?.get(p);
+          if (!got) {
+            ocr ??= await createOcr(ocrOpts.lang);
+            got = await ocrPage(page, ocr, ocrOpts.twoColumns);
+            await ocrOpts.cache?.set(p, got);
+          }
+          ocrPages++;
+          for (const text of got) lines.push({ text, page: p });
+        }
+      }
       page.cleanup();
       onProgress?.(p, pdf.numPages);
       if (p % 10 === 0) await new Promise((r) => setTimeout(r));
     }
   } finally {
+    await ocr?.close();
     await task.destroy();
   }
-  return { lines, pages: pdf.numPages };
+  return { lines, pages: pdf.numPages, scannedPages, ocrPages };
 }
 
 /** Toglie intestazioni e numeri di pagina, che si ripetono quasi identici su molte pagine e finirebbero dentro il testo degli incantesimi */
@@ -237,12 +292,20 @@ export function dropRunningLines(lines: Line[], pages: number): Line[] {
   return lines.filter((l) => l.text.length > 60 || (seen.get(norm(l.text))?.size ?? 0) < limit || /:\s*\S/.test(l.text) || !!parseHeader(l.text));
 }
 
-export async function indexBook(blob: Blob, bookId: string, onProgress?: (done: number, total: number) => void, signal?: { cancelled: boolean }): Promise<SpellIndex> {
-  const { lines, pages } = await extractLines(blob, onProgress, signal);
-  return { bookId, indexedAt: Date.now(), pages, spells: parseSpellLines(dropRunningLines(lines, pages)) };
+export async function indexBook(blob: Blob, bookId: string, onProgress?: (done: number, total: number) => void, signal?: { cancelled: boolean }, ocrOpts?: OcrOptions): Promise<SpellIndex> {
+  const { lines, pages, scannedPages, ocrPages } = await extractLines(blob, onProgress, signal, ocrOpts);
+  return { bookId, indexedAt: Date.now(), pages, scannedPages, ocrPages, spells: parseSpellLines(dropRunningLines(lines, pages)) };
 }
 
 const key = (cid: string, slotId: string) => `spells:${cid}:${slotId}`;
 export const saveIndex = (cid: string, slotId: string, idx: SpellIndex) => idbSet(key(cid, slotId), idx);
 export const loadIndex = async (cid: string, slotId: string) => (await idbGet(key(cid, slotId))) as SpellIndex | undefined;
 export const deleteIndex = (cid: string, slotId: string) => idbDel(key(cid, slotId));
+
+export const ocrCache = (cid: string, slotId: string, lang: OcrLang, twoColumns: boolean) => {
+  const k = (p: number) => `ocr:${cid}:${slotId}:${lang}:${twoColumns ? 2 : 1}:${p}`;
+  return {
+    get: async (p: number) => (await idbGet(k(p))) as string[] | undefined,
+    set: (p: number, lines: string[]) => idbSet(k(p), lines),
+  };
+};

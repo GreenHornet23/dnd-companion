@@ -8,3 +8,4 @@ src-tauri/gen/schemas
 .dev.vars
 .wrangler
 public/pdfjs
+public/tesseract

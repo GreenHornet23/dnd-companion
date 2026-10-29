@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal, notify } from "./ui";
 import { useCampaign } from "../lib/hooks";
 import { getAssetBlob, getLocalBook } from "../lib/store";
-import { indexBook, loadIndex, saveIndex, normClass, type SpellIndex, type SpellRef } from "../lib/spellIndex";
+import { indexBook, loadIndex, saveIndex, normClass, ocrCache, type OcrOptions, type SpellIndex, type SpellRef } from "../lib/spellIndex";
+import type { OcrLang } from "../lib/ocr";
 import type { BookSlot, Spell } from "../lib/types";
 import { uid } from "../lib/id";
 
@@ -29,6 +30,12 @@ export function SpellBrowser({ className, known, onAdd, onClose }: Props) {
   const [lvl, setLvl] = useState<number | "all">("all");
   const [onlyClass, setOnlyClass] = useState(true);
   const [open, setOpen] = useState<string>();
+  const [ocrLang, setOcrLang] = useState<OcrLang>("ita");
+  const [twoCols, setTwoCols] = useState(true);
+  const [from, setFrom] = useState("1");
+  const [to, setTo] = useState("999");
+  const [ocrFor, setOcrFor] = useState<string>();
+  const [startedAt, setStartedAt] = useState(0);
 
   useEffect(() => {
     let dead = false;
@@ -41,15 +48,21 @@ export function SpellBrowser({ className, known, onAdd, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cid]);
 
-  const run = async (slot: BookSlot) => {
+  const run = async (slot: BookSlot, ocr?: boolean) => {
     cancel.current = { cancelled: false };
+    setStartedAt(Date.now());
     setBusy({ slot: slot.id, done: 0, total: 0 });
     try {
       const blob = await bookBlob(cid, slot);
       if (!blob) throw new Error("File non disponibile su questo dispositivo: caricalo nella pagina Manuali.");
-      const idx = await indexBook(blob, slot.id, (done, total) => setBusy({ slot: slot.id, done, total }), cancel.current);
+      const ocrOpts: OcrOptions | undefined = ocr
+        ? { lang: ocrLang, from: Math.max(1, +from || 1), to: Math.max(1, +to || 999), twoColumns: twoCols, cache: ocrCache(cid, slot.id, ocrLang, twoCols) }
+        : undefined;
+      const idx = await indexBook(blob, slot.id, (done, total) => setBusy({ slot: slot.id, done, total }), cancel.current, ocrOpts);
       if (cancel.current.cancelled) return;
-      if (!idx.spells.length) notify("Nessun incantesimo riconosciuto. Il PDF potrebbe essere una scansione (senza testo) o avere un'impaginazione insolita.");
+      if (!idx.spells.length) notify(idx.scannedPages > idx.pages / 2 && !ocr
+        ? "Questo manuale è una scansione (senza testo): usa «Manuale scansionato (OCR)» sotto il suo nome."
+        : "Nessun incantesimo riconosciuto. Controlla le pagine scelte o l'impaginazione del PDF.");
       await saveIndex(cid, slot.id, idx);
       setIndexes((x) => ({ ...x, [slot.id]: idx }));
     } catch (e) {
@@ -96,8 +109,32 @@ export function SpellBrowser({ className, known, onAdd, onClose }: Props) {
             <li key={s.id} className="row between wrap gap">
               <span><b>{s.title}</b>{" "}<small className="muted">{idx ? `${idx.spells.length} incantesimi` : "non ancora letto"}</small></span>
               {working
-                ? <span className="row gap"><span className="muted">Lettura {busy.done}/{busy.total || "…"}</span><button className="ghost" onClick={() => { cancel.current.cancelled = true; }}>Annulla</button></span>
+                ? <span className="row gap"><span className="muted">Pagina {busy.done}/{busy.total || "…"}{busy.done > 2 && busy.total ? ` · circa ${Math.max(1, Math.round(((Date.now() - startedAt) / busy.done) * (busy.total - busy.done) / 60000))} min` : ""}</span><button className="ghost" onClick={() => { cancel.current.cancelled = true; }}>Annulla</button></span>
                 : <button className="ghost" disabled={!!busy} onClick={() => run(s)}>{idx ? "Rileggi" : "Leggi il manuale"}</button>}
+              {!working && idx && idx.scannedPages > 0 && (
+                <small className="muted" style={{ width: "100%" }}>
+                  {idx.scannedPages} pagine senza testo selezionabile{idx.ocrPages ? ` (${idx.ocrPages} lette con l'OCR)` : ""}.
+                </small>
+              )}
+              {!working && (
+                <div style={{ width: "100%" }}>
+                  <button className="ghost small" onClick={() => setOcrFor(ocrFor === s.id ? undefined : s.id)}>
+                    {ocrFor === s.id ? "▾" : "▸"} Manuale scansionato (OCR)
+                  </button>
+                  {ocrFor === s.id && (
+                    <div className="note">
+                      <p className="muted">Per i PDF fatti di immagini. È lento (qualche secondo a pagina): scegli solo le pagine degli incantesimi. Le pagine già lette restano salvate e non si rifanno.</p>
+                      <div className="row gap wrap">
+                        <label>Lingua <select value={ocrLang} onChange={(e) => setOcrLang(e.target.value as OcrLang)}><option value="ita">Italiano</option><option value="eng">Inglese</option></select></label>
+                        <label>Da pagina <input style={{ width: 70 }} inputMode="numeric" value={from} onChange={(e) => setFrom(e.target.value.replace(/\D/g, ""))} /></label>
+                        <label>a <input style={{ width: 70 }} inputMode="numeric" value={to} onChange={(e) => setTo(e.target.value.replace(/\D/g, ""))} /></label>
+                        <label className="check"><input type="checkbox" checked={twoCols} onChange={(e) => setTwoCols(e.target.checked)} /> Due colonne per pagina</label>
+                      </div>
+                      <button className="primary" disabled={!!busy} onClick={() => run(s, true)}>Leggi con l'OCR</button>
+                    </div>
+                  )}
+                </div>
+              )}
             </li>
           );
         })}
