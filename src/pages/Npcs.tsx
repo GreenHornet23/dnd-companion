@@ -4,6 +4,8 @@ import { useCampaign, shrinkImage } from "../lib/hooks";
 import { AssetImage, Empty, Field, Modal, confirmDo } from "../components/ui";
 import { uid } from "../lib/id";
 import type { Npc } from "../lib/types";
+import { PortraitGen } from "../components/PortraitGen";
+import { buildNpcPrompt, PORTRAIT_STYLES } from "../lib/aiPrompt";
 
 const ATT: Record<Npc["attitude"], string> = { ally: "Alleato", neutral: "Neutrale", hostile: "Ostile", unknown: "Sconosciuto" };
 
@@ -15,6 +17,7 @@ export default function Npcs() {
   const [edit, setEdit] = useState<Npc>();
   const [q, setQ] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const [style, setStyle] = useState(PORTRAIT_STYLES[0].id);
   const npcs = visible(data.npcs).filter((n) => !q || (n.name + n.role + n.location).toLowerCase().includes(q.toLowerCase())).sort((a, b) => a.name.localeCompare(b.name));
 
   return (
@@ -67,6 +70,17 @@ export default function Npcs() {
           </Field>
           <Field label="Descrizione"><textarea rows={3} value={edit.description} onChange={(e) => setEdit({ ...edit, description: e.target.value })} /></Field>
           <Field label="Appunti"><textarea rows={4} value={edit.notes} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} /></Field>
+          <PortraitGen
+            cid={cid}
+            autoPrompt={buildNpcPrompt(edit, edit.description, style)}
+            styles={PORTRAIT_STYLES}
+            style={style}
+            onStyle={setStyle}
+            onUse={async (blob) => {
+              const a = await addAsset(cid, blob, `${edit.name || "png"}.jpg`);
+              setEdit((x) => x && { ...x, portraitAssetId: a.id });
+            }}
+          />
           <div className="row between">
             {data.npcs.some((n) => n.id === edit.id) ? <button className="danger" onClick={() => confirmDo("Eliminare il PNG?", () => { remove(cid, "npcs", edit.id); setEdit(undefined); })}>Elimina</button> : <span />}
             <div className="row gap">

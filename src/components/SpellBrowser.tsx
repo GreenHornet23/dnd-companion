@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal, notify } from "./ui";
 import { useCampaign } from "../lib/hooks";
 import { getAssetBlob, getLocalBook } from "../lib/store";
-import { indexBook, loadIndex, saveIndex, normClass, ocrCache, type OcrOptions, type SpellIndex, type SpellRef } from "../lib/spellIndex";
+import { indexBook, suggestSpellRange, loadIndex, saveIndex, normClass, normName, ocrCache, type OcrOptions, type SpellIndex, type SpellRef } from "../lib/spellIndex";
 import type { OcrLang } from "../lib/ocr";
 import type { BookSlot, Spell } from "../lib/types";
 import { uid } from "../lib/id";
@@ -31,7 +31,7 @@ export function SpellBrowser({ className, known, onAdd, onClose }: Props) {
   const [onlyClass, setOnlyClass] = useState(true);
   const [open, setOpen] = useState<string>();
   const [ocrLang, setOcrLang] = useState<OcrLang>("ita");
-  const [twoCols, setTwoCols] = useState(true);
+  const [cols, setCols] = useState<"auto" | "1" | "2">("auto");
   const [from, setFrom] = useState("1");
   const [to, setTo] = useState("999");
   const [ocrFor, setOcrFor] = useState<string>();
@@ -56,7 +56,7 @@ export function SpellBrowser({ className, known, onAdd, onClose }: Props) {
       const blob = await bookBlob(cid, slot);
       if (!blob) throw new Error("File non disponibile su questo dispositivo: caricalo nella pagina Manuali.");
       const ocrOpts: OcrOptions | undefined = ocr
-        ? { lang: ocrLang, from: Math.max(1, +from || 1), to: Math.max(1, +to || 999), twoColumns: twoCols, cache: ocrCache(cid, slot.id, ocrLang, twoCols) }
+        ? { lang: ocrLang, from: Math.max(1, +from || 1), to: Math.max(1, +to || 999), columns: cols === "auto" ? "auto" : (+cols as 1 | 2), cache: ocrCache(cid, slot.id, ocrLang, cols === "auto" ? "auto" : (+cols as 1 | 2)) }
         : undefined;
       const idx = await indexBook(blob, slot.id, (done, total) => setBusy({ slot: slot.id, done, total }), cancel.current, ocrOpts);
       if (cancel.current.cancelled) return;
@@ -72,21 +72,36 @@ export function SpellBrowser({ className, known, onAdd, onClose }: Props) {
     }
   };
 
-  const all = useMemo(() => {
-    const rows: (SpellRef & { book: string })[] = [];
-    for (const s of slots) for (const sp of indexes[s.id]?.spells ?? []) rows.push({ ...sp, book: s.title });
-    return rows;
+  // Classi per incantesimo: dalla scheda stessa (2024) oppure dagli elenchi per classe di uno qualsiasi dei manuali letti
+  const { all, booksNoInfo } = useMemo(() => {
+    const merged: Record<string, Set<string>> = {};
+    const bookHasInfo: Record<string, boolean> = {};
+    for (const s of slots) {
+      const idx = indexes[s.id];
+      if (!idx) continue;
+      bookHasInfo[s.id] = idx.spells.some((x) => x.classes.length > 0) || Object.keys(idx.classLists ?? {}).length > 0;
+      for (const [n, cs] of Object.entries(idx.classLists ?? {})) for (const c of cs) (merged[n] ??= new Set()).add(c);
+    }
+    const rows: (SpellRef & { book: string; known: boolean })[] = [];
+    for (const s of slots) {
+      for (const sp of indexes[s.id]?.spells ?? []) {
+        const classes = sp.classes.length ? sp.classes : [...(merged[normName(sp.name)] ?? [])];
+        rows.push({ ...sp, classes, book: s.title, known: classes.length > 0 || !!bookHasInfo[s.id] });
+      }
+    }
+    const booksNoInfo = slots.filter((s) => indexes[s.id] && indexes[s.id]!.spells.length > 0 && !bookHasInfo[s.id]).map((s) => s.title);
+    return { all: rows, booksNoInfo };
   }, [slots, indexes]);
 
   const cls = normClass(className).toLowerCase();
-  const hasClassInfo = all.some((s) => s.classes.length);
+  const hasClassInfo = all.some((s) => s.known);
   const classFilterActive = onlyClass && !!className.trim() && hasClassInfo;
   const knownKeys = new Set(known.map((k) => `${k.name.toLowerCase()}|${k.level}`));
   const ql = q.trim().toLowerCase();
   const list = all.filter((s) =>
     (lvl === "all" || s.level === lvl) &&
     (!ql || s.name.toLowerCase().includes(ql)) &&
-    (!classFilterActive || s.classes.length === 0 || s.classes.some((c) => c.toLowerCase() === cls)));
+    (!classFilterActive || !s.known || s.classes.some((c) => c.toLowerCase() === cls)));
   const shown = list.slice(0, 80);
 
   const add = (s: SpellRef & { book: string }) =>
@@ -128,9 +143,17 @@ export function SpellBrowser({ className, known, onAdd, onClose }: Props) {
                         <label>Lingua <select value={ocrLang} onChange={(e) => setOcrLang(e.target.value as OcrLang)}><option value="ita">Italiano</option><option value="eng">Inglese</option></select></label>
                         <label>Da pagina <input style={{ width: 70 }} inputMode="numeric" value={from} onChange={(e) => setFrom(e.target.value.replace(/\D/g, ""))} /></label>
                         <label>a <input style={{ width: 70 }} inputMode="numeric" value={to} onChange={(e) => setTo(e.target.value.replace(/\D/g, ""))} /></label>
-                        <label className="check"><input type="checkbox" checked={twoCols} onChange={(e) => setTwoCols(e.target.checked)} /> Due colonne per pagina</label>
+                        <label>Colonne <select value={cols} onChange={(e) => setCols(e.target.value as "auto" | "1" | "2")}><option value="auto">Automatico</option><option value="2">Sempre due</option><option value="1">Una</option></select></label>
                       </div>
-                      <button className="primary" disabled={!!busy} onClick={() => run(s, true)}>Leggi con l'OCR</button>
+                      <div className="row gap wrap">
+                        <button className="ghost" disabled={!!busy} onClick={async () => {
+                          const blob = await bookBlob(cid, s);
+                          const r = blob ? await suggestSpellRange(blob) : null;
+                          if (r) { setFrom(String(r.from)); setTo(String(r.to)); notify(`Capitolo «${r.title}»: pagine ${r.from}-${r.to}`); }
+                          else notify("Il sommario del PDF non indica il capitolo degli incantesimi: scrivi tu le pagine.");
+                        }}>Trova le pagine dal sommario</button>
+                        <button className="primary" disabled={!!busy} onClick={() => run(s, true)}>Leggi con l'OCR</button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -153,7 +176,11 @@ export function SpellBrowser({ className, known, onAdd, onClose }: Props) {
               <label className="check"><input type="checkbox" checked={onlyClass} onChange={(e) => setOnlyClass(e.target.checked)} /> Solo {className}</label>
             )}
           </div>
-          {!hasClassInfo && <small className="muted">Questo manuale non indica le classi accanto agli incantesimi, quindi l'elenco non è filtrato per classe.</small>}
+          {booksNoInfo.length > 0 && (
+            <small className="muted">
+              {hasClassInfo ? `Per ${booksNoInfo.join(", ")}` : "Per questi manuali"} non ho trovato le classi: gli incantesimi senza classe restano nell'elenco. Per filtrare, leggi anche le pagine con gli elenchi per classe («Spell Lists» / «Elenchi degli incantesimi») del Manuale del Giocatore: le classi valgono per tutti i manuali.
+            </small>
+          )}
           <p className="muted">{list.length} risultati{list.length > shown.length ? " (mostro i primi 80, restringi la ricerca)" : ""}</p>
           <ul className="plain tight">
             {shown.map((s) => {
@@ -163,7 +190,7 @@ export function SpellBrowser({ className, known, onAdd, onClose }: Props) {
                 <li key={k}>
                   <div className="row between gap">
                     <button className="ghost" style={{ textAlign: "left", flex: 1 }} onClick={() => setOpen(open === k ? undefined : k)}>
-                      <b>{s.name}</b> <small className="muted">{s.level === 0 ? "trucchetto" : `liv. ${s.level}`} · {s.school}{s.ritual ? " · rituale" : ""}</small>
+                      <b>{s.name}</b> <small className="muted">{s.level === 0 ? "trucchetto" : `liv. ${s.level}`} · {s.school}{s.ritual ? " · rituale" : ""}{s.uncertain ? " · livello da verificare" : ""}</small>
                     </button>
                     <button disabled={has} onClick={() => add(s)}>{has ? "Già presente" : "Aggiungi"}</button>
                   </div>
