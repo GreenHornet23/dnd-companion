@@ -48,6 +48,10 @@ export interface Character extends Entity {
   name: string;
   player: string;
   race: string;
+  /** Sottorazza (5e 2014): Alto Elfo, Nano delle Colline… */
+  subrace?: string;
+  /** Talenti scelti */
+  feats?: string[];
   className: string;
   /** Sottoclasse: per Guerriero/Ladro "Cavaliere Mistico"/"Ladro Arcano" abilita gli slot da terzo di incantatore */
   subclass: string;

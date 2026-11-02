@@ -3,7 +3,8 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useStore } from "../lib/store";
 import { useCampaign, shrinkImage } from "../lib/hooks";
 import { AssetImage, Empty, Field, confirmDo } from "../components/ui";
-import { ABILITIES, CLASSES, derive, findClass, fmt, racesFor } from "../lib/rules5e";
+import { ABILITIES, CLASSES, activeTraits, classTraitsOf, derive, findClass, fmt, raceTraitsOf, racesFor, subraceOf, suggestedHp } from "../lib/rules5e";
+import { featsFor, findFeat } from "../lib/traits5e";
 import { buildCharacterPrompt, equippedSummary, PORTRAIT_STYLES } from "../lib/aiPrompt";
 import type { Character, Item, Spell } from "../lib/types";
 import { uid } from "../lib/id";
@@ -69,6 +70,14 @@ function SheetTab({ c, set, ruleset, auto }: TabProps & { ruleset: string; auto:
           <input list="races" value={c.race} onChange={(e) => set({ race: e.target.value })} />
           <datalist id="races">{racesFor(ruleset).map((r) => <option key={r.name} value={r.name} />)}</datalist>
         </Field>
+        {ruleset === "5e2014" && raceTraitsOf(c, ruleset)?.subraces && (
+          <Field label="Sottorazza">
+            <select value={c.subrace ?? ""} onChange={(e) => set({ subrace: e.target.value })}>
+              <option value="">—</option>
+              {Object.keys(raceTraitsOf(c, ruleset)!.subraces!).map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </Field>
+        )}
         <Field label="Classe">
           <input list="classes" value={c.className} onChange={(e) => set({ className: e.target.value })} />
           <datalist id="classes">{CLASSES.map((x) => <option key={x.name} value={x.name} />)}</datalist>
@@ -117,14 +126,21 @@ function SheetTab({ c, set, ruleset, auto }: TabProps & { ruleset: string; auto:
 
       <section className="card grid stats">
         <Field label="PF attuali"><Num value={c.hpCurrent} min={-999} onChange={(n) => set({ hpCurrent: n })} /></Field>
-        <Field label="PF massimi"><Num value={c.hpMax} onChange={(n) => set({ hpMax: n })} /></Field>
+        <Field label="PF massimi" hint={auto && suggestedHp(c, ruleset) !== null ? `Media dei dadi: ${suggestedHp(c, ruleset)}` : undefined}>
+          <div className="row gap">
+            <Num value={c.hpMax} onChange={(n) => set({ hpMax: n })} />
+            {auto && suggestedHp(c, ruleset) !== null && suggestedHp(c, ruleset) !== c.hpMax && (
+              <button className="ghost small" title="Imposta i PF massimi alla media dei dadi vita" onClick={() => { const v = suggestedHp(c, ruleset)!; set({ hpMax: v, hpCurrent: Math.min(c.hpCurrent, v) || v }); }}>Calcola</button>
+            )}
+          </div>
+        </Field>
         <Field label="PF temporanei"><Num value={c.hpTemp} onChange={(n) => set({ hpTemp: n })} /></Field>
         <Field label="CA (scrivila tu)"><Num value={c.acBonus} onChange={(n) => set({ acBonus: n })} /></Field>
         {auto && (
           <>
             <div className="stat"><b>{fmt(d.prof)}</b><span>Competenza</span></div>
             <div className="stat"><b>{fmt(d.initiative)}</b><span>Iniziativa</span></div>
-            <div className="stat"><b>{d.speed} ft</b><span>Velocità</span></div>
+            <div className="stat"><b>{d.speed} ft</b><span>Velocità{d.speedNote ? ` (${d.speedNote})` : ""}</span></div>
             <div className="stat"><b>{d.passivePerception}</b><span>Percezione passiva</span></div>
             {d.hitDie && <div className="stat"><b>d{d.hitDie}{c.level > 1 ? ` × ${c.level}` : ""}</b><span>Dado vita</span></div>}
           </>
@@ -149,9 +165,14 @@ function SheetTab({ c, set, ruleset, auto }: TabProps & { ruleset: string; auto:
             <ul className="plain tight">
               {d.skills.map((s) => (
                 <li key={s.key} className="row between">
-                  <button className="skill" title="Tocca per cambiare: nessuna → competenza → maestria"
-                    onClick={() => set({ skillProf: { ...c.skillProf, [s.key]: (((c.skillProf[s.key] ?? 0) + 1) % 3) as 0 | 1 | 2 } })}>
-                    {s.level === 2 ? "◉" : s.level === 1 ? "●" : "○"} {s.label} <small className="muted">({ABILITIES.find((a) => a.key === s.ability)!.short})</small>
+                  <button className="skill" title={d.autoSkills.includes(s.key) ? "Competenza data dalla razza: puoi solo aggiungere la maestria" : "Tocca per cambiare: nessuna → competenza → maestria"}
+                    onClick={() => {
+                      const cur = c.skillProf[s.key] ?? 0;
+                      const locked = d.autoSkills.includes(s.key);
+                      const next = locked ? (cur === 2 ? 1 : 2) : (cur + 1) % 3;
+                      set({ skillProf: { ...c.skillProf, [s.key]: next as 0 | 1 | 2 } });
+                    }}>
+                    {s.level === 2 ? "◉" : s.level === 1 ? "●" : "○"} {s.label} <small className="muted">({ABILITIES.find((a) => a.key === s.ability)!.short}){d.autoSkills.includes(s.key) ? " · razza" : ""}</small>
                   </button>
                   <b>{fmt(s.value)}</b>
                 </li>
@@ -159,6 +180,76 @@ function SheetTab({ c, set, ruleset, auto }: TabProps & { ruleset: string; auto:
             </ul>
           </section>
         </div>
+      )}
+
+      {auto && <FeatsAndTraits c={c} set={set} ruleset={ruleset} />}
+    </>
+  );
+}
+
+function FeatsAndTraits({ c, set, ruleset }: TabProps & { ruleset: string }) {
+  const rt = raceTraitsOf(c, ruleset);
+  const sub = subraceOf(c, ruleset);
+  const ct = classTraitsOf(c, ruleset);
+  const t = activeTraits(c, ruleset);
+  const [pick, setPick] = useState("");
+  const feats = c.feats ?? [];
+  const available = featsFor(ruleset).filter((f) => !feats.includes(f.name));
+  const raceLabel = ruleset === "5e2024" ? "Specie" : "Razza";
+  const Row = ({ tr }: { tr: { name: string; text: string; level?: number } }) => (
+    <li><details><summary><b>{tr.name}</b>{tr.level ? <small className="muted"> · liv. {tr.level}</small> : null}</summary><p className="muted">{tr.text}</p></details></li>
+  );
+  return (
+    <>
+      <section className="card">
+        <h2>Competenze e dati fissi</h2>
+        {!rt && !ct && <p className="muted">Razza o classe non riconosciute dall'elenco: scrivi il nome come nei suggerimenti per vedere qui i tratti automatici.</p>}
+        <ul className="plain tight">
+          {rt && <li><b>Taglia:</b> {rt.size}{(sub?.darkvision ?? rt.darkvision) ? ` · Scurovisione ${sub?.darkvision ?? rt.darkvision} ft` : ""}</li>}
+          {rt && <li><b>Lingue:</b> {rt.languages}{sub?.languages ? ` (${sub.languages})` : ""}</li>}
+          {ct && <li><b>Armature:</b> {ct.armor}</li>}
+          {ct && <li><b>Armi:</b> {ct.weapons}</li>}
+          {ct && ct.tools !== "—" && <li><b>Strumenti:</b> {ct.tools}</li>}
+        </ul>
+        <small className="muted">Riassunti dai manuali base: per i dettagli e le eccezioni vale il tuo manuale. Abilità di classe, background, lingue e strumenti a scelta vanno impostati a mano.</small>
+      </section>
+
+      <section className="card">
+        <h2>Talenti</h2>
+        <div className="row gap wrap">
+          <select value={pick} onChange={(e) => setPick(e.target.value)}>
+            <option value="">Scegli un talento…</option>
+            {available.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
+          </select>
+          <button disabled={!pick} onClick={() => { set({ feats: [...feats, pick] }); setPick(""); }}>Aggiungi</button>
+        </div>
+        {feats.length === 0 && <Empty>Nessun talento. Gli effetti fissi (bonus alle caratteristiche, velocità, iniziativa, PF) si applicano da soli.</Empty>}
+        <ul className="plain tight">
+          {feats.map((n) => (
+            <li key={n} className="row between">
+              <details><summary><b>{n}</b></summary><p className="muted">{findFeat(n)?.text ?? "Talento personalizzato."}</p></details>
+              <button className="ghost" aria-label="Rimuovi" onClick={() => set({ feats: feats.filter((x) => x !== n) })}>✕</button>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {(t.race.length > 0 || t.sub.length > 0) && (
+        <section className="card">
+          <h2>Tratti di {raceLabel.toLowerCase()}{c.subrace && sub ? ` · ${c.subrace}` : ""}</h2>
+          <ul className="plain tight">
+            {t.race.map((tr) => <Row key={tr.name} tr={tr} />)}
+            {t.sub.map((tr) => <Row key={"s" + tr.name} tr={tr} />)}
+          </ul>
+        </section>
+      )}
+
+      {t.cls.length > 0 && (
+        <section className="card">
+          <h2>Privilegi di classe · {c.className} {c.level}</h2>
+          <ul className="plain tight">{t.cls.map((tr, i) => <Row key={i + tr.name} tr={tr} />)}</ul>
+          <small className="muted">Qui compaiono solo i privilegi già ottenuti al livello attuale; quelli di sottoclasse vanno letti sul manuale.</small>
+        </section>
       )}
     </>
   );

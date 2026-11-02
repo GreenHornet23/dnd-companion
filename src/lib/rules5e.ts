@@ -1,4 +1,5 @@
 import type { Ability, Character } from "./types";
+import { CLASS_TRAITS_2014, CLASS_TRAITS_2024, RACE_TRAITS_2014, SPECIES_TRAITS_2024, findFeat, type ClassTraits, type RaceTraits, type SubraceTraits, type Trait } from "./traits5e";
 
 export const ABILITIES: { key: Ability; label: string; short: string }[] = [
   { key: "str", label: "Forza", short: "FOR" },
@@ -102,11 +103,60 @@ export const findClass = (name: string) => CLASSES.find((c) => c.name.toLowerCas
 export const findRace = (name: string, ruleset = "5e2014") =>
   racesFor(ruleset).find((r) => r.name.toLowerCase() === name.trim().toLowerCase());
 
+const norm = (t: string) => t.trim().toLowerCase();
+
+/** Dati fissi della razza/specie del personaggio (se riconosciuta) */
+export function raceTraitsOf(c: Character, ruleset: string): RaceTraits | undefined {
+  const table = ruleset === "5e2024" ? SPECIES_TRAITS_2024 : RACE_TRAITS_2014;
+  const key = Object.keys(table).find((k) => norm(k) === norm(c.race));
+  return key ? table[key] : undefined;
+}
+export function subraceOf(c: Character, ruleset: string): SubraceTraits | undefined {
+  if (ruleset === "5e2024" || !c.subrace) return undefined;
+  const subs = raceTraitsOf(c, ruleset)?.subraces;
+  const key = subs && Object.keys(subs).find((k) => norm(k) === norm(c.subrace!));
+  return key ? subs![key] : undefined;
+}
+export function classTraitsOf(c: Character, ruleset: string): ClassTraits | undefined {
+  const table = ruleset === "5e2024" ? CLASS_TRAITS_2024 : CLASS_TRAITS_2014;
+  const key = Object.keys(table).find((k) => norm(k) === norm(c.className));
+  return key ? table[key] : undefined;
+}
+/** Tratti razziali, di sottorazza e privilegi di classe già ottenuti al livello del personaggio */
+export function activeTraits(c: Character, ruleset: string): { race: Trait[]; sub: Trait[]; cls: Trait[] } {
+  const lvl = Math.max(1, Math.floor(c.level) || 1);
+  return {
+    race: raceTraitsOf(c, ruleset)?.traits ?? [],
+    sub: subraceOf(c, ruleset)?.traits ?? [],
+    cls: (classTraitsOf(c, ruleset)?.features ?? []).filter((f) => (f.level ?? 1) <= lvl).sort((a, b) => (a.level ?? 1) - (b.level ?? 1)),
+  };
+}
+
+/** PF massimi suggeriti con la media dei dadi vita: 1° livello = dado + Cos, poi metà dado + 1 + Cos per livello */
+export function suggestedHp(c: Character, ruleset: string): number | null {
+  const cls = findClass(c.className);
+  if (!cls) return null;
+  const d = derive(c, ruleset);
+  const lvl = Math.max(1, Math.floor(c.level) || 1);
+  const con = d.mods.con;
+  const perLevelBonus = (subraceOf(c, ruleset)?.hpPerLevel ?? 0) + (raceTraitsOf(c, ruleset)?.hpPerLevel ?? 0) +
+    (c.feats ?? []).reduce((n, f) => n + (findFeat(f)?.hpPerLevel ?? 0), 0);
+  const first = cls.hitDie + con;
+  const rest = (lvl - 1) * (Math.floor(cls.hitDie / 2) + 1 + con);
+  return Math.max(lvl, first + rest + perLevelBonus * lvl);
+}
+
 export function effectiveAbilities(c: Character, ruleset: string): Record<Ability, number> {
   const out = { ...c.abilities };
   if (ruleset === "5e2014" && c.applyRacialBonus) {
     const race = findRace(c.race, ruleset);
     if (race) for (const k of Object.keys(race.asi2014) as Ability[]) out[k] += race.asi2014[k] ?? 0;
+    const sub = subraceOf(c, ruleset);
+    if (sub) for (const k of Object.keys(sub.asi) as Ability[]) out[k] += sub.asi[k] ?? 0;
+  }
+  for (const name of c.feats ?? []) {
+    const f = findFeat(name);
+    if (f?.asi) for (const k of Object.keys(f.asi) as Ability[]) out[k] += f.asi[k] ?? 0;
   }
   if (ruleset === "5e2024" && c.bgBonus) {
     for (const k of Object.keys(c.bgBonus) as Ability[]) out[k] += c.bgBonus[k] ?? 0;
@@ -184,6 +234,10 @@ export interface Derived {
   skills: { key: string; label: string; ability: Ability; level: 0 | 1 | 2; value: number }[];
   initiative: number;
   speed: number;
+  /** abilità con competenza fissa da razza (non si possono togliere) */
+  autoSkills: string[];
+  /** note sulla velocità (bonus condizionati) */
+  speedNote?: string;
   passivePerception: number;
   hitDie: number | null;
   spell?: { dc: number; attack: number; abilityLabel: string; info: SpellcastingInfo };
@@ -198,17 +252,32 @@ export function derive(c: Character, ruleset: string): Derived {
   const saves = Object.fromEntries(
     ABILITIES.map((a) => [a.key, { prof: saveSet.has(a.key), value: mods[a.key] + (saveSet.has(a.key) ? prof : 0) }]),
   ) as Derived["saves"];
+  const rt = raceTraitsOf(c, ruleset);
+  const autoSkills = rt?.skills ?? [];
+  const jack = norm(c.className) === "bardo" && c.level >= 2;
   const skills = SKILLS.map((s) => {
-    const level = c.skillProf[s.key] ?? 0;
-    return { ...s, level, value: mods[s.ability] + level * prof };
+    const level = Math.max(c.skillProf[s.key] ?? 0, autoSkills.includes(s.key) ? 1 : 0) as 0 | 1 | 2;
+    return { ...s, level, value: mods[s.ability] + level * prof + (jack && level === 0 ? Math.floor(prof / 2) : 0) };
   });
   const race = findRace(c.race, ruleset);
+  const sub = subraceOf(c, ruleset);
+  const feats = (c.feats ?? []).map(findFeat);
+  const featSpeed = feats.reduce((n, f) => n + (f?.speed ?? 0), 0);
+  const featInit = feats.reduce((n, f) => n + (f?.initiative === "prof" ? prof : f?.initiative ?? 0), 0) +
+    (ruleset === "5e2024" && (c.feats ?? []).some((n) => n.startsWith("Allerta")) ? prof - 5 : 0);
+  const lvl = Math.max(1, Math.floor(c.level) || 1);
+  const cname = norm(c.className);
+  const monkBonus = lvl >= 18 ? 30 : lvl >= 14 ? 25 : lvl >= 10 ? 20 : lvl >= 6 ? 15 : lvl >= 2 ? 10 : 0;
+  const speedNote =
+    cname === "monaco" && monkBonus ? `+${monkBonus} ft senza armatura né scudo` :
+    cname === "barbaro" && lvl >= 5 ? "+10 ft senza armatura pesante" : undefined;
   const info = spellcastingFor(c, ruleset);
   const abil = ABILITIES.find((a) => a.key === info.ability);
   return {
     abilities, mods, prof, saves, skills,
-    initiative: mods.dex,
-    speed: c.speedOverride ?? race?.speed ?? 30,
+    initiative: mods.dex + featInit,
+    speed: c.speedOverride ?? (sub?.speed ?? rt?.speed ?? race?.speed ?? 30) + featSpeed,
+    autoSkills, speedNote,
     passivePerception: 10 + (skills.find((s) => s.key === "perception")?.value ?? 0),
     hitDie: cls?.hitDie ?? null,
     spell:
