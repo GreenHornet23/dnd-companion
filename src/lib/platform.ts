@@ -13,3 +13,20 @@ export async function openExternal(url: string): Promise<void> {
     window.open(url, "_blank", "noopener");
   }
 }
+
+/** Versione e cartella dell'app che sta davvero girando (solo app nativa): serve a capire se esistono più copie installate */
+export async function runtimeInfo(): Promise<{ version?: string; dir?: string }> {
+  if (!isTauri()) return {};
+  try {
+    const { getVersion } = await import("@tauri-apps/api/app");
+    const { resourceDir } = await import("@tauri-apps/api/path");
+    const [version, dir] = await Promise.all([getVersion(), resourceDir().catch(() => undefined)]);
+    return { version, dir };
+  } catch {
+    return {};
+  }
+}
+
+/** Pagina delle release (per scaricare a mano l'installer) */
+export const releasesPageUrl = () =>
+  (import.meta.env.VITE_UPDATE_MANIFEST_URL as string | undefined)?.replace(/\/download\/latest\.json$/, "") || undefined;

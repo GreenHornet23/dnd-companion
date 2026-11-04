@@ -3,8 +3,9 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useStore } from "../lib/store";
 import { useCampaign, shrinkImage } from "../lib/hooks";
 import { AssetImage, Empty, Field, confirmDo } from "../components/ui";
-import { ABILITIES, CLASSES, activeTraits, classTraitsOf, derive, findClass, fmt, raceTraitsOf, racesFor, subraceOf, suggestedHp } from "../lib/rules5e";
+import { ABILITIES, CLASSES, activeTraits, autoSpells, classTraitsOf, subclassOf, derive, findClass, fmt, raceTraitsOf, racesFor, subraceOf, suggestedHp } from "../lib/rules5e";
 import { featsFor, findFeat } from "../lib/traits5e";
+import { subclassOptions } from "../lib/subclasses5e";
 import { buildCharacterPrompt, equippedSummary, PORTRAIT_STYLES } from "../lib/aiPrompt";
 import type { Character, Item, Spell } from "../lib/types";
 import { uid } from "../lib/id";
@@ -70,8 +71,8 @@ function SheetTab({ c, set, ruleset, auto }: TabProps & { ruleset: string; auto:
           <input list="races" value={c.race} onChange={(e) => set({ race: e.target.value })} />
           <datalist id="races">{racesFor(ruleset).map((r) => <option key={r.name} value={r.name} />)}</datalist>
         </Field>
-        {ruleset === "5e2014" && raceTraitsOf(c, ruleset)?.subraces && (
-          <Field label="Sottorazza">
+        {raceTraitsOf(c, ruleset)?.subraces && (
+          <Field label={ruleset === "5e2024" ? "Lignaggio / retaggio" : "Sottorazza"}>
             <select value={c.subrace ?? ""} onChange={(e) => set({ subrace: e.target.value })}>
               <option value="">—</option>
               {Object.keys(raceTraitsOf(c, ruleset)!.subraces!).map((n) => <option key={n} value={n}>{n}</option>)}
@@ -82,8 +83,9 @@ function SheetTab({ c, set, ruleset, auto }: TabProps & { ruleset: string; auto:
           <input list="classes" value={c.className} onChange={(e) => set({ className: e.target.value })} />
           <datalist id="classes">{CLASSES.map((x) => <option key={x.name} value={x.name} />)}</datalist>
         </Field>
-        <Field label="Sottoclasse" hint={cls && (cls.name === "Guerriero" || cls.name === "Ladro") ? "Cavaliere Mistico / Ladro Arcano attivano gli slot incantesimo" : undefined}>
-          <input value={c.subclass} onChange={(e) => set({ subclass: e.target.value })} />
+        <Field label="Sottoclasse" hint={cls && (cls.name === "Guerriero" || cls.name === "Ladro") ? "Cavaliere Mistico / Furfante Arcano attivano gli slot incantesimo" : undefined}>
+          <input list="subclasses" value={c.subclass} onChange={(e) => set({ subclass: e.target.value })} placeholder="Scegli dall'elenco o scrivi" />
+          <datalist id="subclasses">{subclassOptions(c.className, ruleset).map((n) => <option key={n} value={n} />)}</datalist>
         </Field>
         <Field label="Livello"><Num value={c.level} min={1} max={20} onChange={(n) => set({ level: n })} /></Field>
         <Field label="Background"><input value={c.background} onChange={(e) => set({ background: e.target.value })} /></Field>
@@ -227,7 +229,7 @@ function FeatsAndTraits({ c, set, ruleset }: TabProps & { ruleset: string }) {
         <ul className="plain tight">
           {feats.map((n) => (
             <li key={n} className="row between">
-              <details><summary><b>{n}</b></summary><p className="muted">{findFeat(n)?.text ?? "Talento personalizzato."}</p></details>
+              <details><summary><b>{n}</b></summary><p className="muted">{findFeat(n, ruleset)?.text ?? "Talento personalizzato."}</p></details>
               <button className="ghost" aria-label="Rimuovi" onClick={() => set({ feats: feats.filter((x) => x !== n) })}>✕</button>
             </li>
           ))}
@@ -241,6 +243,15 @@ function FeatsAndTraits({ c, set, ruleset }: TabProps & { ruleset: string }) {
             {t.race.map((tr) => <Row key={tr.name} tr={tr} />)}
             {t.sub.map((tr) => <Row key={"s" + tr.name} tr={tr} />)}
           </ul>
+        </section>
+      )}
+
+      {(t.subcls.length > 0 || (c.subclass.trim() && !subclassOf(c, ruleset))) && (
+        <section className="card">
+          <h2>Privilegi di sottoclasse{c.subclass ? ` · ${c.subclass}` : ""}</h2>
+          {t.subcls.length === 0 && <p className="muted">Sottoclasse non presente nell'elenco (es. dai supplementi): leggi i privilegi sul manuale.</p>}
+          <ul className="plain tight">{t.subcls.map((tr, i) => <Row key={i + tr.name} tr={tr} />)}</ul>
+          {subclassOf(c, ruleset)?.note && <small className="muted">{subclassOf(c, ruleset)!.note}</small>}
         </section>
       )}
 
@@ -262,6 +273,7 @@ function SpellsTab({ c, set, ruleset, auto }: TabProps & { ruleset: string; auto
   const [browse, setBrowse] = useState(false);
   const [openSpell, setOpenSpell] = useState<string>();
   const info = d.spell?.info;
+  const autoList = autoSpells(c, ruleset);
   if (!auto) return <p className="note">Lo spellsheet automatico è disponibile per la 5ª edizione.</p>;
   const used = (i: number) => c.slotsUsed[i] ?? 0;
   const setUsed = (i: number, n: number) => {
@@ -304,6 +316,23 @@ function SpellsTab({ c, set, ruleset, auto }: TabProps & { ruleset: string; auto
           ))}
           {info && info.slots.length === 0 && !info.pact && <p className="muted">Nessuno slot a questo livello.</p>}
           <button className="ghost" onClick={() => set({ slotsUsed: [] })}>Riposo lungo: ripristina slot</button>
+        </section>
+      )}
+
+      {auto && autoList.length > 0 && (
+        <section className="card">
+          <h2>Sempre disponibili (razza e sottoclasse)</h2>
+          <ul className="plain tight">
+            {autoList.map((a) => (
+              <li key={a.name} className="row between">
+                <span><b>{a.name}</b> <small className="muted">{a.lvl === 0 ? "trucchetto" : `liv. ${a.lvl}`} · {a.from}</small></span>
+                {!c.spells.some((x) => x.name.toLowerCase() === a.name.toLowerCase()) && (
+                  <button className="ghost small" onClick={() => set({ spells: [...c.spells, { id: uid(), name: a.name, level: a.lvl, prepared: true, notes: a.from, source: a.from }] })}>Aggiungi alla lista</button>
+                )}
+              </li>
+            ))}
+          </ul>
+          <small className="muted">Questi incantesimi non occupano gli incantesimi preparati. Nomi in inglese: rinominali come nel tuo manuale se serve.</small>
         </section>
       )}
 
