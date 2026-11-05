@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useStore } from "../lib/store";
 import { useCampaign } from "../lib/hooks";
@@ -7,6 +7,7 @@ import { useSync } from "../lib/syncStatus";
 import { enableSync } from "../lib/sync";
 import { deleteRemote, encodeInvite } from "../lib/server";
 import { checkForUpdate } from "../lib/updater";
+import { runtimeInfo } from "../lib/platform";
 
 const LS_URL = "dndc:serverUrl";
 
@@ -19,6 +20,8 @@ export default function Settings() {
   const nav = useNavigate();
   const [url, setUrl] = useState(() => localStorage.getItem(LS_URL) ?? "");
   const [createKey, setCreateKey] = useState("");
+  const [info, setInfo] = useState<{ version?: string; dir?: string }>();
+  useEffect(() => { runtimeInfo().then(setInfo); }, []);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string>();
   const [copied, setCopied] = useState(false);
@@ -90,7 +93,8 @@ export default function Settings() {
 
       <section className="card">
         <h2>App</h2>
-        <p className="muted">Versione {__APP_VERSION__}</p>
+        <p className="muted">Versione {__APP_VERSION__}{info?.version && info.version !== __APP_VERSION__ ? ` (l'app in esecuzione dichiara la ${info.version})` : ""}</p>
+        {info?.dir && <p className="muted small">Cartella dell'app: {info.dir}</p>}
         <button onClick={async () => {
           setUpMsg("Controllo…");
           const u = await checkForUpdate();

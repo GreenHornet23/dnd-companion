@@ -7,7 +7,17 @@ import type { Ability } from "./types";
 
 export interface Trait { name: string; text: string; level?: number }
 
-const parse = (src: string): Trait[] =>
+/** Incantesimi concessi da razza o sottoclasse. `level` = livello del personaggio da cui sono disponibili, `lvl` = livello dell'incantesimo (0 = trucchetto) */
+export interface SpellGrant { level: number; spells: { name: string; lvl: number }[]; note?: string }
+
+/** Formato: "1:Bless@1,Cure Wounds@1; 3:Lesser Restoration@2" (livello del personaggio: incantesimo@livello-incantesimo) */
+export const grants = (src: string): SpellGrant[] =>
+  src.split(";").map((part) => {
+    const [lvl, list] = part.split(":");
+    return { level: +lvl.trim(), spells: list.split(",").map((x) => { const [n, l] = x.trim().split("@"); return { name: n.trim(), lvl: +(l ?? 0) }; }) };
+  });
+
+export const parse = (src: string): Trait[] =>
   src.trim().split("\n").map((l) => {
     const p = l.split("|");
     const hasLvl = /^\d+$/.test(p[0]);
@@ -26,6 +36,8 @@ export interface RaceTraits {
   /** velocità diversa da quella di base della razza */
   speed?: number;
   traits: Trait[];
+  /** incantesimi concessi dalla razza/specie */
+  spells?: SpellGrant[];
   subraces?: Record<string, SubraceTraits>;
 }
 export interface SubraceTraits {
@@ -35,6 +47,7 @@ export interface SubraceTraits {
   hpPerLevel?: number;
   languages?: string;
   traits: Trait[];
+  spells?: SpellGrant[];
 }
 
 export const RACE_TRAITS_2014: Record<string, RaceTraits> = {
@@ -62,7 +75,7 @@ Maschera della Natura|Puoi nasconderti anche con coperture naturali leggere.`) }
 Scurovisione Superiore|Scurovisione fino a 36 m.
 Sensibilità alla Luce Solare|Svantaggio ad attacchi e Percezione basata sulla vista in piena luce solare.
 Magia Drow|Luci Danzanti; Luminescenza Fatata dal 3° livello; Oscurità dal 5° (Carisma).
-Addestramento nelle Armi Drow|Competenza con stocco, spada corta e balestra a mano.`) },
+Addestramento nelle Armi Drow|Competenza con stocco, spada corta e balestra a mano.`), spells: grants("1:Dancing Lights@0; 3:Faerie Fire@1; 5:Darkness@2") },
     },
   },
   Nano: {
@@ -109,7 +122,7 @@ Astuzia Gnomesca|Vantaggio ai TS su Intelligenza, Saggezza e Carisma contro la m
     subraces: {
       "Gnomo delle Foreste": { asi: { dex: 1 }, traits: parse(`
 Illusionista Nato|Conosci il trucchetto Illusione Minore (Intelligenza).
-Parlare con le Piccole Bestie|Comunichi idee semplici con bestie piccole o più piccole.`) },
+Parlare con le Piccole Bestie|Comunichi idee semplici con bestie piccole o più piccole.`), spells: grants("1:Minor Illusion@0") },
       "Gnomo delle Rocce": { asi: { con: 1 }, traits: parse(`
 Conoscenza da Artefice|Doppia competenza nelle prove di Storia su oggetti magici, alchemici o tecnologici.
 Truccatore|Competenza con gli strumenti da artigiano (da meccanico); puoi costruire piccoli congegni.`) },
@@ -136,6 +149,7 @@ Attacchi Selvaggi|Con un colpo critico in mischia tiri un dado di danno dell'arm
 Scurovisione|Vedi al buio entro 18 m come con luce fioca.
 Resistenza Infernale|Resistenza ai danni da fuoco.
 Retaggio Infernale|Taumaturgia; Richiamo Infernale dal 3° livello; Oscurità dal 5° (Carisma).`),
+    spells: grants("1:Thaumaturgy@0; 3:Hellish Rebuke@2; 5:Darkness@2"),
   },
 };
 
@@ -156,7 +170,7 @@ Resilienza Nanica (Dwarven Resilience)|Resistenza ai danni da veleno e vantaggio
 Robustezza Nanica (Dwarven Toughness)|+1 punto ferita massimo per ogni livello.
 Conoscenza della Pietra (Stonecunning)|Percezione tellurica a distanza ravvicinata.`) },
   Elfo: { size: "Media", darkvision: 60, languages: "Comune + 2 a scelta", traits: parse(`
-Lignaggio Elfico (Elven Lineage)|Scegli Alto Elfo, Drow o Elfo dei Boschi: trucchetto e incantesimi dal 3° e 5° livello.
+Lignaggio Elfico (Elven Lineage)|Scegli Alto Elfo, Drow o Elfo dei Boschi (campo «Sottorazza»): trucchetto e incantesimi dal 3° e 5° livello.
 Retaggio Fatato (Fey Ancestry)|Vantaggio ai TS contro charme.
 Sensi Acuti (Keen Senses)|Competenza in Intuizione, Percezione o Sopravvivenza (a scelta).
 Trance|Riposo lungo in 4 ore di meditazione.`) },
@@ -183,6 +197,28 @@ Tenacia Implacabile (Relentless Endurance)|Una volta per riposo lungo, a 0 PF ne
 Retaggio Ultraterreno (Fiendish Legacy)|Scegli Abissale, Ctonio o Infernale: resistenza e incantesimi dal 3° e 5° livello.
 Presenza Ultraterrena (Otherworldly Presence)|Conosci il trucchetto Taumaturgia.`) },
 };
+
+
+// Lignaggi/retaggi/ascendenze 2024 (si scelgono nel campo «Sottorazza»; non danno bonus alle caratteristiche)
+const LIN = (traits: string, spells?: string): SubraceTraits => ({ asi: {}, traits: parse(traits), spells: spells ? grants(spells) : undefined });
+SPECIES_TRAITS_2024.Elfo.subraces = {
+  "Alto Elfo (High Elf)": LIN("Lignaggio Alto Elfo|Trucchetto Prestidigitazione (sostituibile a ogni riposo lungo con un trucchetto da mago); dal 3° livello Individuazione del Magico, dal 5° Passo Velato.", "1:Prestidigitation@0; 3:Detect Magic@1; 5:Misty Step@2"),
+  "Drow": LIN("Lignaggio Drow|Scurovisione fino a 36 m; trucchetto Luci Danzanti; dal 3° livello Fiamme Fatate, dal 5° Oscurità.", "1:Dancing Lights@0; 3:Faerie Fire@1; 5:Darkness@2"),
+  "Elfo dei Boschi (Wood Elf)": LIN("Lignaggio Elfo dei Boschi|Velocità 35 ft; trucchetto Druidismo; dal 3° livello Passo Veloce (Longstrider), dal 5° Passare Senza Tracce.", "1:Druidcraft@0; 3:Longstrider@1; 5:Pass without Trace@2"),
+};
+SPECIES_TRAITS_2024.Elfo.subraces["Drow"].darkvision = 120;
+SPECIES_TRAITS_2024.Elfo.subraces["Elfo dei Boschi (Wood Elf)"].speed = 35;
+SPECIES_TRAITS_2024.Gnomo.subraces = {
+  "Gnomo delle Foreste (Forest Gnome)": LIN("Lignaggio delle Foreste|Trucchetto Illusione Minore; Parlare con gli Animali un numero di volte pari al bonus di competenza per riposo lungo.", "1:Minor Illusion@0; 1:Speak with Animals@1"),
+  "Gnomo delle Rocce (Rock Gnome)": LIN("Lignaggio delle Rocce|Trucchetti Riparare e Prestidigitazione; puoi costruire piccoli congegni meccanici.", "1:Mending@0; 1:Prestidigitation@0"),
+};
+SPECIES_TRAITS_2024.Tiefling.subraces = {
+  "Abissale (Abyssal)": LIN("Retaggio Abissale|Resistenza al veleno; trucchetto Spruzzo Velenoso; dal 3° livello Raggio di Malattia, dal 5° Blocca Persone.", "1:Poison Spray@0; 3:Ray of Sickness@1; 5:Hold Person@2"),
+  "Ctonio (Chthonic)": LIN("Retaggio Ctonio|Resistenza al necrotico; trucchetto Tocco Gelido; dal 3° livello Falsa Vita, dal 5° Raggio di Indebolimento.", "1:Chill Touch@0; 3:False Life@1; 5:Ray of Enfeeblement@2"),
+  "Infernale (Infernal)": LIN("Retaggio Infernale|Resistenza al fuoco; trucchetto Dardo di Fuoco; dal 3° livello Rimprovero Infernale, dal 5° Oscurità.", "1:Fire Bolt@0; 3:Hellish Rebuke@1; 5:Darkness@2"),
+};
+SPECIES_TRAITS_2024.Tiefling.spells = grants("1:Thaumaturgy@0");
+SPECIES_TRAITS_2024.Aasimar.spells = grants("1:Light@0");
 
 // ───────────────────────── Classi ─────────────────────────
 export interface ClassTraits {
@@ -767,5 +803,91 @@ export const FEATS: Feat[] = [
 
 ];
 
-export const featsFor = (ruleset: string) => FEATS.filter((f) => f.edition === "both" || f.edition === (ruleset === "5e2024" ? "2024" : "2014"));
-export const findFeat = (name: string) => FEATS.find((f) => f.name === name);
+
+/** Talenti del Manuale del Giocatore 2024 (di origine, generali, stili di combattimento, doni epici). Effetti fissi solo dove sono certi; per le scelte (+1 a una caratteristica) usa i punteggi a mano. */
+const F24 = (name: string, text: string, extra: Partial<Feat> = {}): Feat => ({ name, text, edition: "2024", ...extra });
+export const FEATS_2024: Feat[] = [
+  // Origine
+  F24("Allerta (Alert)", "Aggiungi il bonus di competenza all'iniziativa e puoi scambiarla con un alleato.", { initiative: "prof" }),
+  F24("Artigiano (Crafter)", "Competenza in tre strumenti da artigiano, sconti sugli oggetti non magici, costruzione rapida."),
+  F24("Guaritore (Healer)", "Usa il kit da guaritore per curare; rilancia i dadi di cura 1."),
+  F24("Fortunato (Lucky)", "Punti fortuna (pari al bonus di competenza) per vantaggio o svantaggio sui d20."),
+  F24("Iniziato alla Magia (Magic Initiate)", "Due trucchetti e un incantesimo di 1° livello da una lista (Chierico, Druido o Mago)."),
+  F24("Musicista (Musician)", "Competenza in tre strumenti musicali; canti che danno Ispirazione Eroica."),
+  F24("Aggressore Selvaggio (Savage Attacker)", "Una volta per turno ritiri i dadi di danno di un'arma e scegli il risultato."),
+  F24("Esperto (Skilled)", "Competenza in tre abilità o strumenti a scelta."),
+  F24("Rissoso (Tavern Brawler)", "Colpi senz'armi migliorati (d4), danni alle armi improvvisate e spinta."),
+  F24("Robusto (Tough)", "+2 PF massimi per ogni livello.", { hpPerLevel: 2 }),
+  // Generali (livello 4+)
+  F24("Aumento dei Punteggi Caratteristica (Ability Score Improvement)", "+2 a una caratteristica o +1 a due (massimo 20): modifica i punteggi a mano."),
+  F24("Attore (Actor)", "+1 Carisma; vantaggio a Inganno e Rappresentazione per impersonare; imiti voci e suoni.", { asi: { cha: 1 } }),
+  F24("Atleta (Athlete)", "+1 Forza o Destrezza; velocità di scalata, alzarsi da proni e salti migliorati."),
+  F24("Carica (Charger)", "+1 Forza o Destrezza; dopo lo Scatto: attacco con danno extra o spinta."),
+  F24("Cuoco (Chef)", "+1 Costituzione o Saggezza; competenza negli strumenti da cuoco; pasti che curano e danno PF temporanei."),
+  F24("Esperto di Balestre (Crossbow Expert)", "+1 Destrezza; ignori la ricarica, nessuno svantaggio da vicino, attacco bonus.", { asi: { dex: 1 } }),
+  F24("Schiacciatore (Crusher)", "+1 Forza o Costituzione; spostamento sui colpi contundenti, critici che danno vantaggio agli alleati."),
+  F24("Duellante Difensivo (Defensive Duelist)", "+1 Destrezza; reazione: bonus alla CA con arma accurata in mano.", { asi: { dex: 1 } }),
+  F24("Combattente con Due Armi (Dual Wielder)", "+1 Forza o Destrezza; due armi non pesanti, estrai due armi insieme."),
+  F24("Duro a Morire (Durable)", "+1 Costituzione; recuperi PF extra con i dadi vita.", { asi: { con: 1 } }),
+  F24("Adepto Elementale (Elemental Adept)", "+1 Int/Sag/Car; ignori la resistenza a un tipo di danno elementale."),
+  F24("Toccato dalle Fate (Fey-Touched)", "+1 Int/Sag/Car; Passo Velato e un incantesimo di divinazione o ammaliamento di 1° livello."),
+  F24("Lottatore (Grappler)", "+1 Forza o Destrezza; attacchi per afferrare più efficaci, movimento con l'afferrato."),
+  F24("Maestro delle Armi Grandi (Great Weapon Master)", "+1 Forza; bonus ai danni pari alla competenza con armi pesanti; attacco bonus dopo critici/uccisioni.", { asi: { str: 1 } }),
+  F24("Esperto in Armature Pesanti (Heavily Armored)", "Competenza nelle armature pesanti; +1 Forza o Costituzione."),
+  F24("Maestro delle Armature Pesanti (Heavy Armor Master)", "+1 Forza o Costituzione; riduci i danni fisici non magici subiti."),
+  F24("Capo Ispiratore (Inspiring Leader)", "+1 Saggezza o Carisma; discorso che dà PF temporanei agli alleati."),
+  F24("Mente Acuta (Keen Mind)", "+1 Intelligenza; competenza in un'abilità (Arcano, Indagare, ecc.); ricordi sempre.", { asi: { int: 1 } }),
+  F24("Esperto in Armature Leggere (Lightly Armored)", "+1 Forza o Destrezza; competenza con armature leggere e scudi."),
+  F24("Ammazzamaghi (Mage Slayer)", "+1 Forza o Destrezza; reazione contro chi lancia incantesimi vicino a te."),
+  F24("Addestramento con le Armi Marziali (Martial Weapon Training)", "+1 Forza o Destrezza; competenza con un'arma da guerra a scelta."),
+  F24("Maestro delle Armature Medie (Medium Armor Master)", "+1 Forza o Destrezza; massimo +3 Destrezza alla CA con armatura media."),
+  F24("Esperto in Armature Medie (Moderately Armored)", "+1 Forza o Destrezza; competenza con armature medie e scudi."),
+  F24("Combattente Montato (Mounted Combatant)", "+1 Forza, Destrezza o Saggezza; vantaggio contro bersagli più piccoli della cavalcatura."),
+  F24("Osservatore (Observant)", "+1 Intelligenza o Saggezza; competenza in un'abilità; Cercare come azione bonus."),
+  F24("Perforatore (Piercer)", "+1 Forza o Destrezza; ritiri un dado di danno perforante; critici con dado extra."),
+  F24("Avvelenatore (Poisoner)", "+1 Destrezza o Intelligenza; veleni potenti; competenza con il kit da avvelenatore."),
+  F24("Maestro delle Armi Inastate (Polearm Master)", "+1 Forza o Destrezza; attacco bonus con l'asta; attacchi di opportunità all'avvicinarsi."),
+  F24("Resistente (Resilient)", "+1 a una caratteristica e competenza nei suoi tiri salvezza."),
+  F24("Incantatore Rituale (Ritual Caster)", "+1 Int/Sag/Car; lanci rituali con un libro dei rituali."),
+  F24("Sentinella (Sentinel)", "+1 Forza o Destrezza; gli attacchi di opportunità azzerano la velocità del bersaglio."),
+  F24("Toccato dall'Ombra (Shadow-Touched)", "+1 Int/Sag/Car; Invisibilità e un incantesimo di illusione o necromanzia di 1° livello."),
+  F24("Tiratore Scelto (Sharpshooter)", "+1 Destrezza; ignori la copertura parziale/tre quarti e lo svantaggio a lunga gittata.", { asi: { dex: 1 } }),
+  F24("Maestro di Spada e Scudo (Shield Master)", "+1 Forza; spinta con lo scudo, CA dello scudo ai TS di Destrezza.", { asi: { str: 1 } }),
+  F24("Esperto di Abilità (Skill Expert)", "+1 a una caratteristica; una competenza e una maestria."),
+  F24("Furtivo (Skulker)", "+1 Destrezza; vedi nel buio, attacchi dall'ombra senza rivelarti.", { asi: { dex: 1 } }),
+  F24("Tagliente (Slasher)", "+1 Forza o Destrezza; riduci la velocità del bersaglio con danni taglienti."),
+  F24("Veloce (Speedy)", "+1 Destrezza o Costituzione; +10 ft di velocità; ignori il terreno difficile con Scatto.", { speed: 10 }),
+  F24("Cecchino di Incantesimi (Spell Sniper)", "+1 Int/Sag/Car; gittata doppia, ignori la copertura; un trucchetto aggiuntivo."),
+  F24("Telecinetico (Telekinetic)", "+1 Int/Sag/Car; Mano Magica invisibile; spinta telecinetica."),
+  F24("Telepatico (Telepathic)", "+1 Int/Sag/Car; telepatia entro 18 m; Individuazione dei Pensieri."),
+  F24("Mago da Guerra (War Caster)", "+1 Int/Sag/Car; vantaggio alla concentrazione, incantesimi come attacchi di opportunità."),
+  F24("Maestro d'Armi (Weapon Master)", "+1 Forza o Destrezza; competenza con un'arma e le sue maestrie."),
+  // Stili di combattimento
+  F24("Stile: Tiro con l'Arco (Archery)", "+2 ai tiri per colpire con armi a distanza."),
+  F24("Stile: Combattere alla Cieca (Blind Fighting)", "Vista cieca entro 3 m."),
+  F24("Stile: Difesa (Defense)", "+1 alla CA con un'armatura indossata."),
+  F24("Stile: Duello (Dueling)", "+2 ai danni con un'arma a una mano e l'altra mano libera."),
+  F24("Stile: Combattere con Armi Grandi (Great Weapon Fighting)", "I dadi di danno 1-2 con armi a due mani contano 3."),
+  F24("Stile: Intercettazione (Interception)", "Riduci i danni a un alleato vicino con una reazione."),
+  F24("Stile: Protezione (Protection)", "Svantaggio agli attacchi contro un alleato vicino (con scudo)."),
+  F24("Stile: Armi da Lancio (Thrown Weapon Fighting)", "Estrai armi da lancio e +2 ai danni."),
+  F24("Stile: Due Armi (Two-Weapon Fighting)", "Aggiungi il modificatore ai danni dell'attacco bonus."),
+  F24("Stile: Lotta Senz'Armi (Unarmed Fighting)", "Danni senz'armi d6/d8 e danni a chi afferri."),
+  // Doni epici (livello 19+)
+  F24("Dono dell'Abilità in Combattimento (Boon of Combat Prowess)", "Trasformi un attacco mancato in un colpo."),
+  F24("Dono del Viaggio Dimensionale (Boon of Dimensional Travel)", "Teletrasporto breve dopo aver attaccato o lanciato."),
+  F24("Dono della Resistenza all'Energia (Boon of Energy Resistance)", "Resistenze a più tipi di danno."),
+  F24("Dono del Destino (Boon of Fate)", "Alteri i tiri di d20 di creature vicine."),
+  F24("Dono della Fortezza (Boon of Fortitude)", "+40 PF massimi."),
+  F24("Dono dell'Offesa Irresistibile (Boon of Irresistible Offense)", "Ignori le resistenze ai danni fisici; i critici fanno danni extra."),
+  F24("Dono del Recupero (Boon of Recovery)", "Cura te stesso come azione bonus (riserva di dadi)."),
+  F24("Dono delle Abilità (Boon of Skill)", "Competenza in tutte le abilità."),
+  F24("Dono della Velocità (Boon of Speed)", "+30 ft di velocità, Disimpegno come azione bonus."),
+  F24("Dono del Richiamo degli Incantesimi (Boon of Spell Recall)", "Recuperi slot incantesimo."),
+  F24("Dono dello Spirito Notturno (Boon of the Night Spirit)", "Diventi invisibile nell'ombra, resistenze."),
+  F24("Dono della Vista Pura (Boon of Truesight)", "Vista pura entro 18 m."),
+];
+
+export const featsFor = (ruleset: string): Feat[] =>
+  ruleset === "5e2024" ? [...FEATS_2024, ...FEATS.filter((f) => f.edition === "both" && !FEATS_2024.some((x) => x.name === f.name))] : FEATS.filter((f) => f.edition === "both" || f.edition === "2014");
+export const findFeat = (name: string, ruleset?: string) => (ruleset ? featsFor(ruleset).find((f) => f.name === name) : undefined) ?? FEATS.find((f) => f.name === name) ?? FEATS_2024.find((f) => f.name === name);

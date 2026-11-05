@@ -1,4 +1,5 @@
 import type { Ability, Character } from "./types";
+import { findSubclass, type SubclassInfo } from "./subclasses5e";
 import { CLASS_TRAITS_2014, CLASS_TRAITS_2024, RACE_TRAITS_2014, SPECIES_TRAITS_2024, findFeat, type ClassTraits, type RaceTraits, type SubraceTraits, type Trait } from "./traits5e";
 
 export const ABILITIES: { key: Ability; label: string; short: string }[] = [
@@ -57,7 +58,7 @@ export const CLASSES: ClassInfo[] = [
   { name: "Artefice", hitDie: 8, saves: ["con", "int"], caster: "halfUp", castAbility: "int" },
 ];
 
-export const THIRD_CASTER_SUBCLASSES = ["Cavaliere Mistico", "Eldritch Knight", "Ladro Arcano", "Arcane Trickster"];
+export const THIRD_CASTER_SUBCLASSES = ["Cavaliere Mistico", "Eldritch Knight", "Ladro Arcano", "Furfante Arcano", "Arcane Trickster"];
 
 export interface RaceInfo {
   name: string;
@@ -112,7 +113,7 @@ export function raceTraitsOf(c: Character, ruleset: string): RaceTraits | undefi
   return key ? table[key] : undefined;
 }
 export function subraceOf(c: Character, ruleset: string): SubraceTraits | undefined {
-  if (ruleset === "5e2024" || !c.subrace) return undefined;
+  if (!c.subrace) return undefined;
   const subs = raceTraitsOf(c, ruleset)?.subraces;
   const key = subs && Object.keys(subs).find((k) => norm(k) === norm(c.subrace!));
   return key ? subs![key] : undefined;
@@ -123,9 +124,26 @@ export function classTraitsOf(c: Character, ruleset: string): ClassTraits | unde
   return key ? table[key] : undefined;
 }
 /** Tratti razziali, di sottorazza e privilegi di classe già ottenuti al livello del personaggio */
-export function activeTraits(c: Character, ruleset: string): { race: Trait[]; sub: Trait[]; cls: Trait[] } {
+export const subclassOf = (c: Character, ruleset: string): SubclassInfo | undefined => findSubclass(c.className, c.subclass, ruleset);
+
+/** Incantesimi sempre disponibili per razza, sottorazza e sottoclasse al livello attuale */
+export interface AutoSpell { name: string; lvl: number; from: string }
+export function autoSpells(c: Character, ruleset: string): AutoSpell[] {
+  const lvl = Math.max(1, Math.floor(c.level) || 1);
+  const out: AutoSpell[] = [];
+  const add = (grants: { level: number; spells: { name: string; lvl: number }[] }[] | undefined, from: string) => {
+    for (const g of grants ?? []) if (g.level <= lvl) for (const sp of g.spells) if (!out.some((o) => o.name === sp.name)) out.push({ ...sp, from });
+  };
+  add(raceTraitsOf(c, ruleset)?.spells, ruleset === "5e2024" ? "Specie" : "Razza");
+  add(subraceOf(c, ruleset)?.spells, c.subrace || "Sottorazza");
+  add(subclassOf(c, ruleset)?.spells, c.subclass || "Sottoclasse");
+  return out.sort((a, b) => a.lvl - b.lvl || a.name.localeCompare(b.name));
+}
+
+export function activeTraits(c: Character, ruleset: string): { race: Trait[]; sub: Trait[]; cls: Trait[]; subcls: Trait[] } {
   const lvl = Math.max(1, Math.floor(c.level) || 1);
   return {
+    subcls: (subclassOf(c, ruleset)?.features ?? []).filter((f) => (f.level ?? 1) <= lvl).sort((a, b) => (a.level ?? 1) - (b.level ?? 1)),
     race: raceTraitsOf(c, ruleset)?.traits ?? [],
     sub: subraceOf(c, ruleset)?.traits ?? [],
     cls: (classTraitsOf(c, ruleset)?.features ?? []).filter((f) => (f.level ?? 1) <= lvl).sort((a, b) => (a.level ?? 1) - (b.level ?? 1)),
@@ -140,7 +158,7 @@ export function suggestedHp(c: Character, ruleset: string): number | null {
   const lvl = Math.max(1, Math.floor(c.level) || 1);
   const con = d.mods.con;
   const perLevelBonus = (subraceOf(c, ruleset)?.hpPerLevel ?? 0) + (raceTraitsOf(c, ruleset)?.hpPerLevel ?? 0) +
-    (c.feats ?? []).reduce((n, f) => n + (findFeat(f)?.hpPerLevel ?? 0), 0);
+    (c.feats ?? []).reduce((n, f) => n + (findFeat(f, ruleset)?.hpPerLevel ?? 0), 0);
   const first = cls.hitDie + con;
   const rest = (lvl - 1) * (Math.floor(cls.hitDie / 2) + 1 + con);
   return Math.max(lvl, first + rest + perLevelBonus * lvl);
@@ -155,7 +173,7 @@ export function effectiveAbilities(c: Character, ruleset: string): Record<Abilit
     if (sub) for (const k of Object.keys(sub.asi) as Ability[]) out[k] += sub.asi[k] ?? 0;
   }
   for (const name of c.feats ?? []) {
-    const f = findFeat(name);
+    const f = findFeat(name, ruleset);
     if (f?.asi) for (const k of Object.keys(f.asi) as Ability[]) out[k] += f.asi[k] ?? 0;
   }
   if (ruleset === "5e2024" && c.bgBonus) {
@@ -207,7 +225,7 @@ export function spellcastingFor(c: Character, ruleset: string): SpellcastingInfo
   if (
     type === "none" &&
     (cls.name === "Guerriero" || cls.name === "Ladro") &&
-    THIRD_CASTER_SUBCLASSES.some((s) => s.toLowerCase() === c.subclass.trim().toLowerCase())
+    THIRD_CASTER_SUBCLASSES.some((s) => c.subclass.trim().length >= 5 && c.subclass.toLowerCase().includes(s.toLowerCase()))
   ) {
     type = "third";
     ability = "int";
@@ -261,10 +279,9 @@ export function derive(c: Character, ruleset: string): Derived {
   });
   const race = findRace(c.race, ruleset);
   const sub = subraceOf(c, ruleset);
-  const feats = (c.feats ?? []).map(findFeat);
+  const feats = (c.feats ?? []).map((n) => findFeat(n, ruleset));
   const featSpeed = feats.reduce((n, f) => n + (f?.speed ?? 0), 0);
-  const featInit = feats.reduce((n, f) => n + (f?.initiative === "prof" ? prof : f?.initiative ?? 0), 0) +
-    (ruleset === "5e2024" && (c.feats ?? []).some((n) => n.startsWith("Allerta")) ? prof - 5 : 0);
+  const featInit = feats.reduce((n, f) => n + (f?.initiative === "prof" ? prof : f?.initiative ?? 0), 0);
   const lvl = Math.max(1, Math.floor(c.level) || 1);
   const cname = norm(c.className);
   const monkBonus = lvl >= 18 ? 30 : lvl >= 14 ? 25 : lvl >= 10 ? 20 : lvl >= 6 ? 15 : lvl >= 2 ? 10 : 0;
